@@ -19,6 +19,7 @@ final class TranscriptionModel {
     private(set) var liveDroppedCount = 0
     private(set) var suggestedQuestion: String?
     private(set) var transcriptEntries: [TranscriptEntry] = []
+    var includeRecentContext = false
     var isBusy: Bool { isRunning || isBatchRunning }
     private var batchTask: Task<Void, Never>?
     private var batchID: UUID?
@@ -177,6 +178,10 @@ final class TranscriptionModel {
         timeline.recentContext(maximumCharacters: maximumCharacters)
     }
 
+    func contextForRequest() -> String {
+        includeRecentContext ? timeline.recentContext(maximumCharacters: 4_000) : ""
+    }
+
     private func stopLive(clearStatus: Bool) {
         isLiveEnabled = false; liveID = nil; liveSettings = nil
         liveQueue = []; liveQueuedCount = 0; liveSeenIDs = []
@@ -238,5 +243,5 @@ final class TranscriptionModel {
         batchID = nil; batchTask?.cancel(); batchTask = nil; isBatchRunning = false; remainingCount = 0
         activeID = nil; task?.cancel(); task = nil; isRunning = false; partialText = ""; status = "Распознавание отменено"
     }
-    func reset() { cancel(); result = nil; editableText = ""; completedRequest = nil; remoteConsent = false; batchResults = []; liveDroppedCount = 0; suggestedQuestion = nil; timeline.clear(); transcriptEntries = [] }
+    func reset() { cancel(); result = nil; editableText = ""; completedRequest = nil; remoteConsent = false; batchResults = []; liveDroppedCount = 0; suggestedQuestion = nil; timeline.clear(); transcriptEntries = []; includeRecentContext = false }
 }

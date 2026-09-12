@@ -27,6 +27,22 @@ final class TranscriptionFlowTests: XCTestCase {
         try await waitForResult(model)
         XCTAssertNil(model.suggestedQuestion)
     }
+
+    @MainActor
+    func testTranscriptContextRequiresOptInAndResetClearsIt() async throws {
+        let model = TranscriptionModel(secrets: NoTranscriptionSecrets(), network: NetworkClient(), serviceFactory: { _ in
+            ScriptedTranscription(text: "Расскажите про каналы Go")
+        })
+        let system = AudioSegment(source: .system, startedAt: 0, samples: [0.1], reason: "Тест")
+        model.start(segment: system, configuration: ModelConfiguration(), vocabulary: [])
+        try await waitForResult(model)
+        XCTAssertTrue(model.contextForRequest().isEmpty)
+        model.includeRecentContext = true
+        XCTAssertTrue(model.contextForRequest().contains("[Собеседник]"))
+        model.reset()
+        XCTAssertFalse(model.includeRecentContext)
+        XCTAssertTrue(model.contextForRequest().isEmpty)
+    }
     @MainActor
     func testLiveQueueProcessesUniqueSegmentsInOrderAndKeepsSources() async throws {
         var calls = 0

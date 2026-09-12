@@ -77,7 +77,11 @@ final class AppModel {
     }
     func requestScreen() { permissions.requestScreen(); refreshPermissions() }
     func finishOnboarding() { preferences.onboardingCompleted = true; showOnboarding = false }
-    func send() { speech.stop(); conversation.send(configuration: providerSettings.configuration) }
+    func send() {
+        speech.stop()
+        conversation.send(configuration: providerSettings.configuration,
+                          transcriptContext: transcription.contextForRequest())
+    }
     func stop() { conversation.cancel(); speech.stop() }
     func requestQuickAction(slot: Int) {
         guard let action = quickActions.actions.first(where: { $0.slot == slot }) else { return }
@@ -95,7 +99,8 @@ final class AppModel {
             // Возможности другой модели не наследуются автоматически.
             if action.selectedModel != providerSettings.configuration.textModel { configuration.visionEnabled = false }
         }
-        speech.stop(); conversation.send(configuration: configuration, action: action)
+        speech.stop(); conversation.send(configuration: configuration, action: action,
+                                         transcriptContext: transcription.contextForRequest())
     }
     func speakAnswer() {
         guard !audio.isRunning || speech.routingAcknowledged else {

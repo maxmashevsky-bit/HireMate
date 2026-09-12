@@ -103,6 +103,12 @@ struct TranscriptionView: View {
                         Text(entry.text).lineLimit(3).textSelection(.enabled)
                     }
                 }
+                Toggle("Добавлять последние реплики в следующий AI-запрос", isOn: $transcription.includeRecentContext)
+                    .disabled(transcription.transcriptEntries.isEmpty)
+                if transcription.includeRecentContext {
+                    Text("Будет добавлено до 4 000 символов. Перед отправкой действует общее подтверждение API в активном профиле. История остаётся недоверенными данными и не может менять системные правила.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Button("Очистить локальную хронологию", role: .destructive) {
                     transcription.clearTranscript()
                 }.disabled(transcription.isBusy || transcription.transcriptEntries.isEmpty)

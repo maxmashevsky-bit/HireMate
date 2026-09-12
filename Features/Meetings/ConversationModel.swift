@@ -33,6 +33,7 @@ final class ConversationModel {
     private(set) var estimatedTokens = 0
     private(set) var actualInputTokens: Int?
     private(set) var actualOutputTokens: Int?
+    private(set) var includedTranscriptCharacters = 0
     private let repository: any MeetingRepository
     private let secrets: any SecureSecretStore
     private let network: NetworkClient
@@ -233,10 +234,10 @@ final class ConversationModel {
         if let index = profiles.firstIndex(where: { $0.id == next.id }) { profiles[index] = next }
     }
 
-    func send(configuration: ModelConfiguration, action: QuickAction? = nil) {
+    func send(configuration: ModelConfiguration, action: QuickAction? = nil, transcriptContext: String = "") {
         guard !isGenerating, !isLoading else { return }
-        retrievedNotes = []; includedNoteIDs = []
-        guard profile.usesNotes, let noteSearch else { sendPrepared(configuration: configuration, action: action, notes: []); return }
+        retrievedNotes = []; includedNoteIDs = []; includedTranscriptCharacters = 0
+        guard profile.usesNotes, let noteSearch else { sendPrepared(configuration: configuration, action: action, notes: [], transcriptContext: transcriptContext); return }
         let profile = profile; let query = draft; let imageID = attachment?.id; let navigation = navigationID
         let id = UUID(); retrievalID = id; isLoading = true; status = "Поиск разрешённых заметок на Mac…"
         retrieval = Task { [weak self] in
@@ -249,11 +250,11 @@ final class ConversationModel {
                     if retrievalID == id { status = "Вопрос изменился. Запустите отправку заново." }; return
                 }
                 isLoading = false; retrievedNotes = notes
-                sendPrepared(configuration: configuration, action: action, notes: notes)
+                sendPrepared(configuration: configuration, action: action, notes: notes, transcriptContext: transcriptContext)
             } catch { if retrievalID == id { status = "Поиск заметок не завершён. Запрос в AI не отправлен." } }
         }
     }
-    private func sendPrepared(configuration: ModelConfiguration, action: QuickAction?, notes: [NoteFragment]) {
+    private func sendPrepared(configuration: ModelConfiguration, action: QuickAction?, notes: [NoteFragment], transcriptContext: String) {
         guard !isGenerating, !isLoading else { return }
         if let action {
             guard action.isValid, action.profileID == meeting.profileID else { status = "Действие относится к другому профилю."; return }
@@ -272,12 +273,15 @@ final class ConversationModel {
                 // Запас под vision приблизительный: точная тарификация зависит от сервера.
                 budgetConfiguration.maxContextTokens -= 4_096
             }
-            let textPrompt = try assembler.assemble(profile: profile, history: messages, subchatID: activeChatID, question: question, configuration: budgetConfiguration, notes: notes)
+            let textPrompt = try assembler.assemble(profile: profile, history: messages, subchatID: activeChatID, question: question,
+                                                    configuration: budgetConfiguration, notes: notes, transcriptContext: transcriptContext)
             let prompt = GenerationRequest(id: textPrompt.id, profileID: textPrompt.profileID, messages: textPrompt.messages,
                 currentQuestion: textPrompt.currentQuestion, wasTruncated: textPrompt.wasTruncated,
-                estimatedInputTokens: textPrompt.estimatedInputTokens + (includedImage == nil ? 0 : 4_096), attachments: includedImage.map { [$0] } ?? [], includedNoteIDs: textPrompt.includedNoteIDs)
+                estimatedInputTokens: textPrompt.estimatedInputTokens + (includedImage == nil ? 0 : 4_096), attachments: includedImage.map { [$0] } ?? [],
+                includedNoteIDs: textPrompt.includedNoteIDs, includedTranscriptCharacters: textPrompt.includedTranscriptCharacters)
             if configuration.mode == .remote { try configuration.validate() }
             includedNoteIDs = prompt.includedNoteIDs
+            includedTranscriptCharacters = textPrompt.includedTranscriptCharacters
             contextWasTruncated = prompt.wasTruncated; estimatedTokens = prompt.estimatedInputTokens
             actualInputTokens = nil; actualOutputTokens = nil
             let user = ChatMessage(subchatID: activeChatID, role: .user, content: question + (includedImage == nil ? "" : "\n\n[Приложен просмотренный снимок; изображение не сохраняется в истории.]"), isDemo: configuration.mode == .demo)
@@ -381,6 +385,7 @@ final class ConversationModel {
         pendingChatID = nil
         retrievedNotes = []; includedNoteIDs = []
         contextWasTruncated = false; status = next.isEphemeral ? "История только в памяти" : "Встреча сохраняется локально"
+        includedTranscriptCharacters = 0
     }
     func exportCurrent(markdown: Bool = false) async throws -> Data {
         // Текущие сообщения берутся из памяти: экспорт не теряет ответ при сбое записи на диск.
