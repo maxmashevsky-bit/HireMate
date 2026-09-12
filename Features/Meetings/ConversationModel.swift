@@ -34,6 +34,7 @@ final class ConversationModel {
     private(set) var actualInputTokens: Int?
     private(set) var actualOutputTokens: Int?
     private(set) var includedTranscriptCharacters = 0
+    private(set) var requestedTranscriptCharacters = 0
     private let repository: any MeetingRepository
     private let secrets: any SecureSecretStore
     private let network: NetworkClient
@@ -136,7 +137,7 @@ final class ConversationModel {
             chats.append(chat); activeChatID = chat.id; messages = []; streamingText = ""
             if draft == originalDraft { draft = "" }
             if attachment?.id == originalAttachment { attachment = nil }
-            pendingChatID = nil; retrievedNotes = []; includedNoteIDs = []
+            pendingChatID = nil; retrievedNotes = []; includedNoteIDs = []; requestedTranscriptCharacters = 0; includedTranscriptCharacters = 0
             contextWasTruncated = false; estimatedTokens = 0
             actualInputTokens = nil; actualOutputTokens = nil
             status = "Поддиалог создан"
@@ -165,7 +166,7 @@ final class ConversationModel {
             else if parent.isEphemeral { loaded = [] }
             else { loaded = try await repository.messages(subchatID: id, meetingID: parent.id) }
             guard navigationID == navigation else { return }
-            activeChatID = id; messages = loaded; retrievedNotes = []; includedNoteIDs = []; attachment = nil; draft = ""; streamingText = ""
+            activeChatID = id; messages = loaded; retrievedNotes = []; includedNoteIDs = []; requestedTranscriptCharacters = 0; includedTranscriptCharacters = 0; attachment = nil; draft = ""; streamingText = ""
         } catch { if navigationID == navigation { status = "Не удалось открыть поддиалог." } }
     }
     func renameActiveChat(_ name: String) async {
@@ -205,7 +206,7 @@ final class ConversationModel {
             chats.removeAll { $0.id == deleted }; memory.removeValue(forKey: deleted)
             failedMessageWrites = failedMessageWrites.filter { $0.value.answer.subchatID != deleted }
             activeChatID = next.id; messages = loaded; draft = ""; attachment = nil
-            pendingChatID = nil; retrievedNotes = []; includedNoteIDs = []; streamingText = ""
+            pendingChatID = nil; retrievedNotes = []; includedNoteIDs = []; requestedTranscriptCharacters = 0; includedTranscriptCharacters = 0; streamingText = ""
             status = "Поддиалог удалён"
         } catch { if navigationID == navigation { status = "Поддиалог не удалён." } }
     }
@@ -236,7 +237,7 @@ final class ConversationModel {
 
     func send(configuration: ModelConfiguration, action: QuickAction? = nil, transcriptContext: String = "") {
         guard !isGenerating, !isLoading else { return }
-        retrievedNotes = []; includedNoteIDs = []; includedTranscriptCharacters = 0
+        retrievedNotes = []; includedNoteIDs = []; requestedTranscriptCharacters = 0; includedTranscriptCharacters = 0
         guard profile.usesNotes, let noteSearch else { sendPrepared(configuration: configuration, action: action, notes: [], transcriptContext: transcriptContext); return }
         let profile = profile; let query = draft; let imageID = attachment?.id; let navigation = navigationID
         let id = UUID(); retrievalID = id; isLoading = true; status = "Поиск разрешённых заметок на Mac…"
@@ -281,6 +282,7 @@ final class ConversationModel {
                 includedNoteIDs: textPrompt.includedNoteIDs, includedTranscriptCharacters: textPrompt.includedTranscriptCharacters)
             if configuration.mode == .remote { try configuration.validate() }
             includedNoteIDs = prompt.includedNoteIDs
+            requestedTranscriptCharacters = transcriptContext.count
             includedTranscriptCharacters = textPrompt.includedTranscriptCharacters
             contextWasTruncated = prompt.wasTruncated; estimatedTokens = prompt.estimatedInputTokens
             actualInputTokens = nil; actualOutputTokens = nil
@@ -383,7 +385,7 @@ final class ConversationModel {
         meeting = next; self.chats = chats; activeChatID = first.id
         messages = []; memory = [:]; attachment = nil; draft = ""; streamingText = ""; remoteConsent = false
         pendingChatID = nil
-        retrievedNotes = []; includedNoteIDs = []
+        retrievedNotes = []; includedNoteIDs = []; requestedTranscriptCharacters = 0
         contextWasTruncated = false; status = next.isEphemeral ? "История только в памяти" : "Встреча сохраняется локально"
         includedTranscriptCharacters = 0
     }

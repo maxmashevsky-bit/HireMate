@@ -159,6 +159,7 @@ struct OverlayView: View {
                 }
             }
             Divider()
+            ContextUsageView(conversation: conversation)
             if model.providerSettings.configuration.mode == .remote {
                 Toggle("Разрешаю отправить вопрос, контекст и вложения выбранному API", isOn: $conversation.remoteConsent).font(.caption)
             }

@@ -85,6 +85,7 @@ struct MeetingsView: View {
                     Text(app.providerSettings.configuration.baseURL).font(.caption).foregroundStyle(.secondary)
                 }
                 RetrievalSourcesView(app: app)
+                ContextUsageView(conversation: conversation)
                 AttachmentPreview(conversation: conversation)
                 TextEditor(text: $conversation.draft).frame(height: 80).border(.secondary.opacity(0.3))
                 HStack {
@@ -92,7 +93,6 @@ struct MeetingsView: View {
                         .buttonStyle(.borderedProminent).disabled((conversation.isGenerating || conversation.isLoading) || !InputValidation.canSend(conversation.draft))
                     Button("Остановить") { app.stop() }.disabled(!conversation.isGenerating && !conversation.isLoading)
                     Spacer()
-                    if conversation.contextWasTruncated { Text("Старые сообщения исключены из запроса").font(.caption).foregroundStyle(.orange) }
                 }
                 SpeechControls(app: app)
                 Text(conversation.status).font(.caption).foregroundStyle(.secondary)

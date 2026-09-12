@@ -101,6 +101,7 @@ struct DemoView: View {
                         .textSelection(.enabled).lineSpacing(4)
                         .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
                     RetrievalSourcesView(app: model)
+                    ContextUsageView(conversation: model.conversation)
                     SpeechControls(app: model)
                     Text(model.demoStatus).font(.caption).foregroundStyle(.secondary)
                 }
