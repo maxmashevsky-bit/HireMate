@@ -50,4 +50,21 @@ final class TranscriptTimelineTests: XCTestCase {
         XCTAssertTrue(context.hasSuffix("[Собеседник] Новый вопрос?\n[Максим] Мой ответ"))
         XCTAssertLessThanOrEqual(context.count, 128)
     }
+
+    func testContextWindowAddsBoundedExtractiveCompaction() {
+        var timeline = TranscriptTimeline(maximumEntries: 2, maximumCharacters: 1_000)
+        timeline.append(result("Первый вопрос про каналы", source: .system, time: 1))
+        timeline.append(result("Первый ответ", source: .microphone, time: 2))
+        timeline.append(result("Второй вопрос", source: .system, time: 3))
+        timeline.append(result("Второй ответ", source: .microphone, time: 4))
+        XCTAssertEqual(timeline.compactedInterviewerCount, 1)
+        XCTAssertEqual(timeline.compactedCandidateCount, 1)
+        let window = timeline.contextWindow(maximumCharacters: 512)
+        XCTAssertTrue(window.contains("[Ранее]"))
+        XCTAssertTrue(window.contains("Первый вопрос про каналы"))
+        XCTAssertTrue(window.hasSuffix("[Собеседник] Второй вопрос\n[Максим] Второй ответ"))
+        XCTAssertLessThanOrEqual(window.count, 512)
+        timeline.clear()
+        XCTAssertEqual(timeline.compactedCount, 0)
+    }
 }

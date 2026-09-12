@@ -25,6 +25,10 @@ public struct TranscriptEntry: Identifiable, Codable, Sendable, Equatable {
 
 public struct TranscriptTimeline: Sendable {
     public private(set) var entries: [TranscriptEntry] = []
+    public private(set) var compactedInterviewerCount = 0
+    public private(set) var compactedCandidateCount = 0
+    private var compactedHighlights: [String] = []
+    public var compactedCount: Int { compactedInterviewerCount + compactedCandidateCount }
     public let maximumEntries: Int
     public let maximumCharacters: Int
 
@@ -39,14 +43,17 @@ public struct TranscriptTimeline: Sendable {
         if let index = entries.firstIndex(where: { $0.segmentID == entry.segmentID }) { entries[index] = entry }
         else { entries.append(entry) }
         while entries.count > maximumEntries || entries.reduce(0, { $0 + $1.text.count }) > maximumCharacters {
-            entries.removeFirst()
+            compact(entries.removeFirst())
         }
     }
 
-    public mutating func clear() { entries.removeAll() }
+    public mutating func clear() {
+        entries.removeAll(); compactedHighlights.removeAll()
+        compactedInterviewerCount = 0; compactedCandidateCount = 0
+    }
 
     public func recentContext(maximumCharacters limit: Int = 4_000) -> String {
-        let bounded = min(maximumCharacters, max(128, limit))
+        let bounded = min(maximumCharacters, max(1, limit))
         var selected: [String] = []
         var used = 0
         for entry in entries.reversed() {
@@ -61,5 +68,35 @@ public struct TranscriptTimeline: Sendable {
             selected.append(line); used += line.count + (selected.count == 1 ? 0 : 1)
         }
         return selected.reversed().joined(separator: "\n")
+    }
+
+    public func contextWindow(maximumCharacters limit: Int = 4_000) -> String {
+        let bounded = min(maximumCharacters, max(128, limit))
+        let summary = compactedSummary(maximumCharacters: min(1_000, bounded / 3))
+        let separator = summary.isEmpty ? 0 : 1
+        let recent = recentContext(maximumCharacters: max(1, bounded - summary.count - separator))
+        if summary.isEmpty { return recent }
+        if recent.isEmpty { return summary }
+        return summary + "\n" + recent
+    }
+
+    private mutating func compact(_ entry: TranscriptEntry) {
+        if entry.speaker == .interviewer { compactedInterviewerCount += 1 }
+        else { compactedCandidateCount += 1 }
+        compactedHighlights.append("[\(entry.speaker.title)] \(String(entry.text.prefix(240)))")
+        if compactedHighlights.count > 4 { compactedHighlights.removeFirst(compactedHighlights.count - 4) }
+    }
+
+    private func compactedSummary(maximumCharacters limit: Int) -> String {
+        guard compactedCount > 0 else { return "" }
+        let header = "[Ранее] Исключено дословных реплик: собеседник — \(compactedInterviewerCount), Максим — \(compactedCandidateCount)."
+        guard header.count < limit else { return String(header.prefix(limit)) }
+        var lines = [header]
+        var used = header.count
+        for highlight in compactedHighlights.reversed() {
+            guard used + highlight.count + 1 <= limit else { continue }
+            lines.insert(highlight, at: 1); used += highlight.count + 1
+        }
+        return lines.joined(separator: "\n")
     }
 }

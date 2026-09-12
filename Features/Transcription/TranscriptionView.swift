@@ -97,6 +97,10 @@ struct TranscriptionView: View {
             Section("Локальная хронология") {
                 Text("Только финальные реплики. Системный звук помечается как собеседник, микрофон — как Максим. Хранится до 50 реплик или 12 000 символов в памяти.")
                     .font(.caption)
+                if transcription.compactedTranscriptCount > 0 {
+                    Text("Старых реплик в локальной дословной выжимке: \(transcription.compactedTranscriptCount)")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 ForEach(transcription.transcriptEntries.suffix(10)) { entry in
                     VStack(alignment: .leading, spacing: 3) {
                         Text(entry.speaker.title).font(.headline)

@@ -20,6 +20,7 @@ final class TranscriptionModel {
     private(set) var suggestedQuestion: String?
     private(set) var transcriptEntries: [TranscriptEntry] = []
     var includeRecentContext = false
+    var compactedTranscriptCount: Int { timeline.compactedCount }
     var isBusy: Bool { isRunning || isBatchRunning }
     private var batchTask: Task<Void, Never>?
     private var batchID: UUID?
@@ -179,7 +180,7 @@ final class TranscriptionModel {
     }
 
     func contextForRequest() -> String {
-        includeRecentContext ? timeline.recentContext(maximumCharacters: 4_000) : ""
+        includeRecentContext ? timeline.contextWindow(maximumCharacters: 4_000) : ""
     }
 
     private func stopLive(clearStatus: Bool) {
