@@ -17,6 +17,7 @@ final class TranscriptionModel {
     private(set) var isLiveEnabled = false
     private(set) var liveQueuedCount = 0
     private(set) var liveDroppedCount = 0
+    private(set) var suggestedQuestion: String?
     var isBusy: Bool { isRunning || isBatchRunning }
     private var batchTask: Task<Void, Never>?
     private var batchID: UUID?
@@ -34,6 +35,7 @@ final class TranscriptionModel {
     private let secrets: any SecureSecretStore
     private let network: NetworkClient
     private let serviceFactory: ((ModelConfiguration) -> any TranscriptionService)?
+    private let questionDetector: QuestionDetector
     private var task: Task<Void, Never>?
     private var activeID: UUID?
     private struct CompletedRequest: Equatable {
@@ -46,8 +48,10 @@ final class TranscriptionModel {
     }
     private var completedRequest: CompletedRequest?
     init(secrets: any SecureSecretStore, network: NetworkClient,
-         serviceFactory: ((ModelConfiguration) -> any TranscriptionService)? = nil) {
+         serviceFactory: ((ModelConfiguration) -> any TranscriptionService)? = nil,
+         questionDetector: QuestionDetector = QuestionDetector()) {
         self.secrets = secrets; self.network = network; self.serviceFactory = serviceFactory
+        self.questionDetector = questionDetector
     }
 
     func start(segment: AudioSegment, configuration: ModelConfiguration, vocabulary: [String]) {
@@ -144,6 +148,7 @@ final class TranscriptionModel {
                     return
                 }
                 batchResults.append(result)
+                if let candidate = questionDetector.candidate(from: result) { suggestedQuestion = candidate }
                 if batchResults.count > 50 { batchResults.removeFirst(batchResults.count - 50) }
             }
         }
@@ -153,6 +158,13 @@ final class TranscriptionModel {
         guard isLiveEnabled else { return }
         stopLive(clearStatus: true)
     }
+
+    func takeSuggestedQuestion() -> String? {
+        defer { suggestedQuestion = nil }
+        return suggestedQuestion
+    }
+
+    func dismissSuggestedQuestion() { suggestedQuestion = nil }
 
     private func stopLive(clearStatus: Bool) {
         isLiveEnabled = false; liveID = nil; liveSettings = nil
@@ -198,6 +210,7 @@ final class TranscriptionModel {
                 guard let finalResult else { throw ProviderError.incompleteStream }
                 completedRequest = request
                 result = finalResult; editableText = finalResult.text; partialText = ""
+                if let candidate = questionDetector.candidate(from: finalResult) { suggestedQuestion = candidate }
                 status = finalResult.isDemo ? "Учебный образец. Это не расшифровка вашей записи." : "Распознано. Исправьте термины перед использованием."
                 isRunning = false; task = nil
             } catch {
@@ -213,5 +226,5 @@ final class TranscriptionModel {
         batchID = nil; batchTask?.cancel(); batchTask = nil; isBatchRunning = false; remainingCount = 0
         activeID = nil; task?.cancel(); task = nil; isRunning = false; partialText = ""; status = "Распознавание отменено"
     }
-    func reset() { cancel(); result = nil; editableText = ""; completedRequest = nil; remoteConsent = false; batchResults = []; liveDroppedCount = 0 }
+    func reset() { cancel(); result = nil; editableText = ""; completedRequest = nil; remoteConsent = false; batchResults = []; liveDroppedCount = 0; suggestedQuestion = nil }
 }

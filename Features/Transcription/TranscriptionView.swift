@@ -71,6 +71,19 @@ struct TranscriptionView: View {
                 }
             }
             Section("Текст") {
+                if let suggestion = transcription.suggestedQuestion {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Возможный вопрос собеседника", systemImage: "questionmark.bubble")
+                            .font(.headline)
+                        Text(suggestion).textSelection(.enabled)
+                        HStack {
+                            Button("Перенести в поле вопроса") {
+                                if let question = transcription.takeSuggestedQuestion() { app.question = question }
+                            }
+                            Button("Скрыть") { transcription.dismissSuggestedQuestion() }
+                        }
+                    }
+                }
                 if !transcription.partialText.isEmpty { Text(transcription.partialText).italic().foregroundStyle(.secondary) }
                 TextEditor(text: $transcription.editableText).frame(minHeight: 180).disabled(transcription.isBusy)
                 if let result = transcription.result {

@@ -10,6 +10,24 @@ private struct NoTranscriptionSecrets: SecureSecretStore {
 
 final class TranscriptionFlowTests: XCTestCase {
     @MainActor
+    func testOnlyFinalSystemTranscriptSuggestsQuestion() async throws {
+        var text = "Как устроен scheduler Go"
+        let model = TranscriptionModel(secrets: NoTranscriptionSecrets(), network: NetworkClient(), serviceFactory: { _ in
+            ScriptedTranscription(text: text)
+        })
+        let system = AudioSegment(source: .system, startedAt: 0, samples: [0.1], reason: "Тест")
+        model.start(segment: system, configuration: ModelConfiguration(), vocabulary: [])
+        try await waitForResult(model)
+        XCTAssertEqual(model.takeSuggestedQuestion(), text)
+        XCTAssertNil(model.suggestedQuestion)
+
+        text = "Почему я выбрал Go?"
+        let microphone = AudioSegment(source: .microphone, startedAt: 1, samples: [0.1], reason: "Тест")
+        model.start(segment: microphone, configuration: ModelConfiguration(), vocabulary: [])
+        try await waitForResult(model)
+        XCTAssertNil(model.suggestedQuestion)
+    }
+    @MainActor
     func testLiveQueueProcessesUniqueSegmentsInOrderAndKeepsSources() async throws {
         var calls = 0
         let model = TranscriptionModel(secrets: NoTranscriptionSecrets(), network: NetworkClient(), serviceFactory: { _ in
@@ -231,13 +249,14 @@ final class TranscriptionFlowTests: XCTestCase {
 private struct ScriptedTranscription: TranscriptionService {
     var failAfterFinal = false
     var wrongSource = false
+    var text = "Финальный текст"
     func transcribe(_ segment: AudioSegment, language: TranscriptionLanguage,
                     vocabulary: [String]) -> AsyncThrowingStream<TranscriptionEvent, Error> {
         AsyncThrowingStream { continuation in
             let output = AudioSegment(id: segment.id,
                                       source: wrongSource ? (segment.source == .system ? .microphone : .system) : segment.source,
                                       startedAt: segment.startedAt, samples: segment.samples, reason: "Тест")
-            continuation.yield(.final(TranscriptResult(segment: output, text: "Финальный текст", isDemo: true)))
+            continuation.yield(.final(TranscriptResult(segment: output, text: text, isDemo: true)))
             continuation.yield(.partial("Запоздалый текст"))
             continuation.yield(.final(TranscriptResult(segment: output, text: "Дубликат", isDemo: true)))
             if failAfterFinal { continuation.finish(throwing: ProviderError.transport) }
