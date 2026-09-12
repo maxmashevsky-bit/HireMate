@@ -117,6 +117,20 @@ struct TranscriptionView: View {
                     transcription.clearTranscript()
                 }.disabled(transcription.isBusy || transcription.transcriptEntries.isEmpty)
             }
+            if let duration = transcription.lastRequestMilliseconds {
+                Section("Последние локальные метрики STT") {
+                    if let wait = transcription.lastQueueWaitMilliseconds {
+                        LabeledContent("Ожидание очереди", value: "\(wait) мс")
+                    }
+                    if let first = transcription.lastFirstEventMilliseconds {
+                        LabeledContent("Первое событие", value: "\(first) мс")
+                    }
+                    LabeledContent("Завершение запроса", value: "\(duration) мс")
+                    LabeledContent("Результат", value: transcription.lastRequestSucceeded == true ? "Успешно" : "Ошибка")
+                    Text("Измерение начинается перед вызовом STT-провайдера. Аудио, текст, URL и ключи в метрику не записываются.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
         }.formStyle(.grouped).navigationTitle("Расшифровка")
             .confirmationDialog("Распознать \(pendingBatch.count) фрагментов?", isPresented: $confirmBatch) {
                 Button("Начать очередь") {

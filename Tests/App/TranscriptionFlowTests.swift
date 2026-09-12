@@ -10,6 +10,23 @@ private struct NoTranscriptionSecrets: SecureSecretStore {
 
 final class TranscriptionFlowTests: XCTestCase {
     @MainActor
+    func testMeasuresProviderLatencyWithoutPayloadData() async throws {
+        let model = TranscriptionModel(secrets: NoTranscriptionSecrets(), network: NetworkClient(), serviceFactory: { _ in
+            TimedTranscription()
+        })
+        let segment = AudioSegment(source: .system, startedAt: 0, samples: [0.1], reason: "Тест")
+        model.start(segment: segment, configuration: ModelConfiguration(), vocabulary: [])
+        try await waitForResult(model)
+        let first = try XCTUnwrap(model.lastFirstEventMilliseconds)
+        let total = try XCTUnwrap(model.lastRequestMilliseconds)
+        XCTAssertGreaterThanOrEqual(first, 15)
+        XCTAssertGreaterThanOrEqual(total, first)
+        XCTAssertEqual(model.lastRequestSucceeded, true)
+        XCTAssertNil(model.lastQueueWaitMilliseconds)
+        model.reset()
+        XCTAssertNil(model.lastRequestMilliseconds)
+    }
+    @MainActor
     func testOnlyFinalSystemTranscriptSuggestsQuestion() async throws {
         var text = "Как устроен scheduler Go"
         let model = TranscriptionModel(secrets: NoTranscriptionSecrets(), network: NetworkClient(), serviceFactory: { _ in
@@ -56,6 +73,7 @@ final class TranscriptionFlowTests: XCTestCase {
         try await eventually { model.batchResults.count == 2 && !model.isRunning }
         XCTAssertEqual(calls, 2)
         XCTAssertEqual(model.batchResults.map(\.source), [.microphone, .system])
+        XCTAssertNotNil(model.lastQueueWaitMilliseconds)
         XCTAssertTrue(model.isLiveEnabled)
         model.disableLive()
         XCTAssertFalse(model.isLiveEnabled)
@@ -183,6 +201,7 @@ final class TranscriptionFlowTests: XCTestCase {
         XCTAssertNil(model.result)
         XCTAssertTrue(model.editableText.isEmpty)
         XCTAssertTrue(model.partialText.isEmpty)
+        XCTAssertEqual(model.lastRequestSucceeded, false)
         shouldFail = false
         model.start(segment: segment, configuration: ModelConfiguration(), vocabulary: [])
         XCTAssertTrue(model.isRunning)
@@ -259,6 +278,24 @@ final class TranscriptionFlowTests: XCTestCase {
         try await waitForResult(model)
         XCTAssertEqual(model.result?.segmentID, segment.id)
         XCTAssertTrue(model.editableText.contains("Demo question"))
+    }
+}
+
+private struct TimedTranscription: TranscriptionService {
+    func transcribe(_ segment: AudioSegment, language: TranscriptionLanguage,
+                    vocabulary: [String]) -> AsyncThrowingStream<TranscriptionEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    try await Task.sleep(for: .milliseconds(25))
+                    continuation.yield(.partial("часть"))
+                    try await Task.sleep(for: .milliseconds(25))
+                    continuation.yield(.final(TranscriptResult(segment: segment, text: "Как измеряется задержка?", isDemo: true)))
+                    continuation.finish()
+                } catch { continuation.finish(throwing: error) }
+            }
+            continuation.onTermination = { @Sendable _ in task.cancel() }
+        }
     }
 }
 

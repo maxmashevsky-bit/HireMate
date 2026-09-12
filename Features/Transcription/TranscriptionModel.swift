@@ -19,12 +19,20 @@ final class TranscriptionModel {
     private(set) var liveDroppedCount = 0
     private(set) var suggestedQuestion: String?
     private(set) var transcriptEntries: [TranscriptEntry] = []
+    private(set) var lastQueueWaitMilliseconds: Int?
+    private(set) var lastFirstEventMilliseconds: Int?
+    private(set) var lastRequestMilliseconds: Int?
+    private(set) var lastRequestSucceeded: Bool?
     var includeRecentContext = false
     var compactedTranscriptCount: Int { timeline.compactedCount }
     var isBusy: Bool { isRunning || isBatchRunning }
     private var batchTask: Task<Void, Never>?
     private var batchID: UUID?
-    private var liveQueue: [AudioSegment] = []
+    private struct QueuedSegment {
+        let segment: AudioSegment
+        let enqueuedAt: ContinuousClock.Instant
+    }
+    private var liveQueue: [QueuedSegment] = []
     private var liveSeenIDs = Set<UUID>()
     private var liveTask: Task<Void, Never>?
     private var liveID: UUID?
@@ -135,19 +143,20 @@ final class TranscriptionModel {
             status = "Автоочередь заполнена. Новый фрагмент пропущен; остановите захват или дождитесь распознавания."
             return
         }
-        liveQueue.append(segment); liveQueuedCount = liveQueue.count
+        liveQueue.append(QueuedSegment(segment: segment, enqueuedAt: ContinuousClock.now)); liveQueuedCount = liveQueue.count
         guard liveTask == nil, let id = liveID else { return }
         liveTask = Task { [weak self] in
             guard let self else { return }
             defer { if liveID == id { liveTask = nil } }
             while liveID == id, isLiveEnabled, !Task.isCancelled, !liveQueue.isEmpty {
-                let next = liveQueue.removeFirst(); liveQueuedCount = liveQueue.count
-                perform(segment: next, configuration: settings.configuration, vocabulary: settings.vocabulary,
-                        requestedLanguage: settings.language, consent: settings.consent)
+                let queued = liveQueue.removeFirst(); liveQueuedCount = liveQueue.count
+                let queueWait = Self.milliseconds(queued.enqueuedAt.duration(to: .now))
+                perform(segment: queued.segment, configuration: settings.configuration, vocabulary: settings.vocabulary,
+                        requestedLanguage: settings.language, consent: settings.consent, queueWaitMilliseconds: queueWait)
                 let current = task
                 await current?.value
                 guard liveID == id, isLiveEnabled, !Task.isCancelled else { return }
-                guard let result, result.segmentID == next.id else {
+                guard let result, result.segmentID == queued.segment.id else {
                     stopLive(clearStatus: false)
                     return
                 }
@@ -192,7 +201,7 @@ final class TranscriptionModel {
     }
 
     private func perform(segment: AudioSegment, configuration: ModelConfiguration, vocabulary: [String],
-                         requestedLanguage: TranscriptionLanguage, consent: Bool) {
+                         requestedLanguage: TranscriptionLanguage, consent: Bool, queueWaitMilliseconds: Int? = nil) {
         if configuration.mode == .remote && !consent { status = "Подтвердите отправку выбранного аудиофрагмента."; return }
         let request = CompletedRequest(segment: segment.id, language: requestedLanguage,
                                        provider: configuration.mode.rawValue, model: configuration.transcriptionModel,
@@ -203,6 +212,9 @@ final class TranscriptionModel {
         else if configuration.mode == .demo { service = FakeTranscriptionService() }
         else { service = RemoteTranscriptionService(configuration: configuration, secrets: secrets, network: network) }
         let id = UUID(); activeID = id; isRunning = true
+        let startedAt = ContinuousClock.now
+        lastQueueWaitMilliseconds = queueWaitMilliseconds
+        lastFirstEventMilliseconds = nil; lastRequestMilliseconds = nil; lastRequestSucceeded = nil
         partialText = ""; editableText = ""; result = nil; completedRequest = nil
         status = configuration.mode == .demo ? "Демо: показываем пример расшифровки, звук не анализируется." : "Отправляется только выбранный аудиофрагмент."
         task = Task { [weak self] in
@@ -211,6 +223,9 @@ final class TranscriptionModel {
                 for try await event in service.transcribe(segment, language: requestedLanguage, vocabulary: vocabulary) {
                     try Task.checkCancellation()
                     guard let self, activeID == id else { return }
+                    if lastFirstEventMilliseconds == nil {
+                        lastFirstEventMilliseconds = Self.milliseconds(startedAt.duration(to: .now))
+                    }
                     switch event {
                     case .partial(let text): if finalResult == nil { partialText = text }
                     case .final(let result):
@@ -230,19 +245,26 @@ final class TranscriptionModel {
                 timeline.append(finalResult); transcriptEntries = timeline.entries
                 if let candidate = questionDetector.candidate(from: finalResult) { suggestedQuestion = candidate }
                 status = finalResult.isDemo ? "Учебный образец. Это не расшифровка вашей записи." : "Распознано. Исправьте термины перед использованием."
+                lastRequestMilliseconds = Self.milliseconds(startedAt.duration(to: .now)); lastRequestSucceeded = true
                 isRunning = false; task = nil
             } catch {
                 guard let self, activeID == id else { return }
+                lastRequestMilliseconds = Self.milliseconds(startedAt.duration(to: .now)); lastRequestSucceeded = false
                 isRunning = false; task = nil
                 partialText = ""
                 status = error is CancellationError ? "Распознавание отменено" : ((error as? ProviderError)?.localizedDescription ?? "Распознавание не выполнено. Повторите вручную.")
             }
         }
     }
+    private static func milliseconds(_ duration: Duration) -> Int {
+        let components = duration.components
+        let value = components.seconds * 1_000 + components.attoseconds / 1_000_000_000_000_000
+        return Int(min(Int64(Int.max), max(0, value)))
+    }
     func cancel() {
         if isLiveEnabled { stopLive(clearStatus: false) }
         batchID = nil; batchTask?.cancel(); batchTask = nil; isBatchRunning = false; remainingCount = 0
         activeID = nil; task?.cancel(); task = nil; isRunning = false; partialText = ""; status = "Распознавание отменено"
     }
-    func reset() { cancel(); result = nil; editableText = ""; completedRequest = nil; remoteConsent = false; batchResults = []; liveDroppedCount = 0; suggestedQuestion = nil; timeline.clear(); transcriptEntries = []; includeRecentContext = false }
+    func reset() { cancel(); result = nil; editableText = ""; completedRequest = nil; remoteConsent = false; batchResults = []; liveDroppedCount = 0; suggestedQuestion = nil; timeline.clear(); transcriptEntries = []; includeRecentContext = false; lastQueueWaitMilliseconds = nil; lastFirstEventMilliseconds = nil; lastRequestMilliseconds = nil; lastRequestSucceeded = nil }
 }
