@@ -94,6 +94,19 @@ struct TranscriptionView: View {
                     .disabled(transcription.editableText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || transcription.isBusy)
                 Text("Передача текста в поле вопроса не запускает генерацию и не отправляет его в сеть.").font(.caption)
             }
+            Section("Локальная хронология") {
+                Text("Только финальные реплики. Системный звук помечается как собеседник, микрофон — как Максим. Хранится до 50 реплик или 12 000 символов в памяти.")
+                    .font(.caption)
+                ForEach(transcription.transcriptEntries.suffix(10)) { entry in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(entry.speaker.title).font(.headline)
+                        Text(entry.text).lineLimit(3).textSelection(.enabled)
+                    }
+                }
+                Button("Очистить локальную хронологию", role: .destructive) {
+                    transcription.clearTranscript()
+                }.disabled(transcription.isBusy || transcription.transcriptEntries.isEmpty)
+            }
         }.formStyle(.grouped).navigationTitle("Расшифровка")
             .confirmationDialog("Распознать \(pendingBatch.count) фрагментов?", isPresented: $confirmBatch) {
                 Button("Начать очередь") {
