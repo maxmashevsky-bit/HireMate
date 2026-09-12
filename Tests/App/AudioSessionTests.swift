@@ -25,7 +25,53 @@ private final class ControlledCapture: AudioCaptureService {
     func releaseStop() { holdStop = false; stopGate?.resume(); stopGate = nil }
 }
 
+@MainActor
+private struct DemoSecrets: SecureSecretStore {
+    func save(_ secret: String) throws { XCTFail("Локальный демо-сценарий не сохраняет ключ") }
+    func read() throws -> String? { XCTFail("Локальный демо-сценарий не читает ключ"); return nil }
+    func delete() throws { XCTFail("Локальный демо-сценарий не удаляет ключ") }
+}
+
 final class AudioSessionTests: XCTestCase {
+    @MainActor
+    func testLocalDemoConnectsAudioTranscriptionQuestionAndAnswer() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let capture = ControlledCapture()
+        let repository = GRDBMeetingRepository(directory: directory)
+        let secrets = DemoSecrets()
+        let network = NetworkClient()
+        let audio = AudioSessionModel(capture: capture)
+        let transcription = TranscriptionModel(secrets: secrets, network: network)
+        let conversation = ConversationModel(profileID: .technical, repository: repository,
+                                              secrets: secrets, network: network, noteSearch: repository)
+        audio.onSegment = { transcription.enqueueLive($0) }
+        audio.inputMode = .system
+        audio.questionMode = .manual
+        audio.configuration.speechCheck = false
+        audio.consent = true
+        XCTAssertTrue(transcription.enableLive(configuration: ModelConfiguration(),
+                                               vocabulary: conversation.profile.technologies))
+
+        audio.start()
+        try await eventually { audio.isRunning }
+        await audio.toggleManualQuestion()
+        capture.frames?.yield(AudioFrame(timestamp: 1, source: .system, sampleRate: 16_000,
+                                         samples: Array(repeating: 0.2, count: 8_000)))
+        try await eventually { (audio.buffered[.system] ?? 0) > 0 }
+        await audio.toggleManualQuestion()
+        try await eventually { transcription.suggestedQuestion != nil && !transcription.isBusy }
+
+        conversation.draft = try XCTUnwrap(transcription.takeSuggestedQuestion())
+        conversation.send(configuration: ModelConfiguration())
+        try await eventually(timeout: .seconds(4)) { !conversation.isGenerating && !conversation.answer.isEmpty }
+        XCTAssertEqual(conversation.messages.count, 2)
+        XCTAssertEqual(conversation.messages.last?.state, .complete)
+        XCTAssertEqual(conversation.messages.last?.isDemo, true)
+        XCTAssertFalse(transcription.transcriptEntries.isEmpty)
+        await audio.shutdown()
+    }
+
     @MainActor
     func testDeliveryGapStopsCaptureAndClearsBuffer() async throws {
         let capture = ControlledCapture()
@@ -45,8 +91,8 @@ final class AudioSessionTests: XCTestCase {
         await model.shutdown()
     }
     @MainActor
-    private func eventually(_ predicate: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(3)
+    private func eventually(timeout: Duration = .seconds(3), _ predicate: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + timeout
         while !predicate() {
             guard ContinuousClock.now < deadline else {
                 XCTFail("Состояние аудиосессии не изменилось вовремя")

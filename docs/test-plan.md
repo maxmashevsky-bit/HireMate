@@ -18,6 +18,8 @@ Phase 14: own-bank preview/provenance, duplicate detection, import validation/Un
 Phase 15: offline Kanban/filter/timeline/funnel/salary sample size, dedupe, extraction preview, connector approval/no cookies.
 Phase 16: local mentor history only, no external publication/payments.
 
+Сквозной локальный smoke-test использует управляемый `AudioCaptureService`, но реальные `AudioPipeline`, `TranscriptionModel`, `QuestionDetector` и `ConversationModel`: системный аудиокадр становится ручным фрагментом, проходит через opt-in очередь Fake STT, переносится как предложенный вопрос и завершается Fake LLM-ответом. Тест не обращается к устройствам, TCC, Keychain или сети; реальный capture/provider проверяются отдельно.
+
 ## Manual matrix
 Каждый результат фиксируется в verification.md: hardware/OS, 1/2 displays, scaled/Retina, fullscreen Spaces, light/dark, allow/deny/revoke microphone/screen, headphones/device change, sleep/wake, network loss, long session, low disk, QuickTime, screen share. Непроведённое = NOT_TESTED, не VERIFIED.
 

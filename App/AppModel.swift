@@ -5,10 +5,10 @@ import CopilotCore
 
 @MainActor @Observable
 final class AppModel {
-    let network = NetworkClient()
+    let network: NetworkClient
     let providerSettings = ProviderSettingsModel()
     let transcription: TranscriptionModel
-    let audio = AudioSessionModel()
+    let audio: AudioSessionModel
     let screenshot = ScreenshotModel()
     let quickActions = QuickActionStore()
     let speech = SpeechModel()
@@ -39,16 +39,26 @@ final class AppModel {
 
     init(preferences: PreferencesStore? = nil,
          permissions: (any PermissionService)? = nil,
-         secrets: (any SecureSecretStore)? = nil) {
+         secrets: (any SecureSecretStore)? = nil,
+         repository: (any MeetingRepository & NoteRepository & NoteSearchService)? = nil,
+         audioCapture: (any AudioCaptureService)? = nil,
+         transcriptionServiceFactory: ((ModelConfiguration) -> any TranscriptionService)? = nil,
+         providerFactory: ((ModelConfiguration) -> any StreamingLLMProvider)? = nil) {
         let resolvedPreferences = preferences ?? PreferencesStore()
+        let resolvedNetwork = NetworkClient()
+        let resolvedRepository = repository ?? GRDBMeetingRepository()
         self.preferences = resolvedPreferences
         self.permissions = permissions ?? MacPermissionService()
         self.secrets = secrets ?? KeychainSecretStore()
-        self.transcription = TranscriptionModel(secrets: self.secrets, network: network)
-        let repository = GRDBMeetingRepository()
-        self.databaseBenchmark = LocalDatabaseBenchmark(repository: repository)
-        self.notes = NotesModel(profile: resolvedPreferences.profile, repository: repository)
-        self.conversation = ConversationModel(profileID: resolvedPreferences.profile, repository: repository, secrets: self.secrets, network: network, noteSearch: repository)
+        self.network = resolvedNetwork
+        self.audio = AudioSessionModel(capture: audioCapture)
+        self.transcription = TranscriptionModel(secrets: self.secrets, network: resolvedNetwork,
+                                                serviceFactory: transcriptionServiceFactory)
+        self.databaseBenchmark = LocalDatabaseBenchmark(repository: resolvedRepository)
+        self.notes = NotesModel(profile: resolvedPreferences.profile, repository: resolvedRepository)
+        self.conversation = ConversationModel(profileID: resolvedPreferences.profile, repository: resolvedRepository,
+                                              secrets: self.secrets, network: resolvedNetwork,
+                                              noteSearch: resolvedRepository, providerFactory: providerFactory)
         theme = resolvedPreferences.theme
         profile = resolvedPreferences.profile
         showOnboarding = !resolvedPreferences.onboardingCompleted
