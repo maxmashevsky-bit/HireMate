@@ -1,0 +1,84 @@
+import SwiftUI
+import CopilotCore
+
+@MainActor
+struct SettingsView: View {
+    @Bindable var model: AppModel
+    @State private var secretInput = ""
+    var body: some View {
+        Form {
+            Section("Внешний вид") {
+                Picker("Тема", selection: $model.theme) {
+                    ForEach(AppTheme.allCases) { Text($0.title).tag($0) }
+                }
+                Text("Язык: русский. Настройки хранятся на этом Mac.")
+            }
+            OverlaySettingsView(controller: model.overlay)
+            SpeechSettingsView(speech: model.speech)
+            Section("AI-провайдер") {
+                ProviderConfigurationView(settings: model.providerSettings)
+                Text("API-ключ остаётся только в Keychain. Режим распознавания использует выбранные параметры.")
+                Text("Демо не использует ключ. Отправка в собственный API запускается отдельной командой и может тарифицироваться провайдером.").foregroundStyle(.secondary)
+                SecureField("API-ключ — только macOS Keychain", text: $secretInput)
+                    .textContentType(.password)
+                HStack {
+                    Button("Сохранить в Keychain") {
+                        model.saveSecret(secretInput)
+                        secretInput = ""
+                    }.disabled(secretInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button("Удалить ключ", role: .destructive) { model.deleteSecret(); secretInput = "" }
+                }
+                Text("Ключ не хранится в настройках, базе данных или логах. Поле очищается после сохранения и при уходе с экрана.").font(.caption)
+            }
+            Section("Приватность") {
+                LabeledContent("Аналитика приложения", value: "Не используется")
+                Text("Захват звука запускается отдельно в разделе «Звук». Запись экрана в файл отсутствует.")
+                LabeledContent("История демо", value: "Только в памяти")
+                Text("Сохранённые встречи можно экспортировать и удалить в разделе «Встречи». Снимки и аудиобуфер не записываются в историю.").foregroundStyle(.secondary)
+            }
+            Section("Знакомство") {
+                Button("Повторить вводный маршрут") { model.showOnboarding = true }
+            }
+        }.formStyle(.grouped).navigationTitle("Настройки")
+            .onDisappear { secretInput = "" }
+    }
+}
+
+@MainActor
+struct DiagnosticsView: View {
+    @Bindable var model: AppModel
+    var body: some View {
+        Form {
+            Section("Разрешения macOS") {
+                LabeledContent("Микрофон", value: model.microphone.title)
+                HStack {
+                    Button("Запросить микрофон") { Task { await model.requestMicrophone() } }
+                        .disabled(model.microphone != .notRequested)
+                    Button("Открыть настройки микрофона") { openSettings(screen: false) }
+                }
+                LabeledContent("Экран и системный звук", value: model.screen.title)
+                HStack {
+                    Button("Запросить доступ к экрану") { model.requestScreen() }.disabled(model.screen == .granted)
+                    Button("Открыть настройки экрана") { openSettings(screen: true) }
+                }
+                Button("Обновить статусы") { model.refreshPermissions() }
+                Text("Системные настройки → Конфиденциальность и безопасность → Микрофон / Запись экрана и системного аудио. Отрицательный результат проверки экрана не позволяет отличить отказ от ещё не запрошенного доступа.").font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Что сейчас проверяется") {
+                Text("Только статус разрешений. Проверка не начинает запись. Accessibility и мониторинг ввода не требуются.")
+                Text("Тест звука и совместимости с трансляцией пока не реализованы. Они появятся с аудиозахватом и оверлеем.").foregroundStyle(.secondary)
+            }
+            Section("Этот Mac") {
+                LabeledContent("macOS", value: ProcessInfo.processInfo.operatingSystemVersionString)
+                LabeledContent("Оперативная память", value: "\(ProcessInfo.processInfo.physicalMemory / 1_073_741_824) ГБ")
+                Text("Серийный номер и идентификатор устройства не собираются.").font(.caption)
+            }
+        }.formStyle(.grouped).navigationTitle("Диагностика")
+            .onAppear { model.refreshPermissions() }
+    }
+    private func openSettings(screen: Bool) {
+        if !model.permissions.openSettings(screen: screen) {
+            model.notice = "Откройте Системные настройки → Конфиденциальность и безопасность вручную."
+        }
+    }
+}

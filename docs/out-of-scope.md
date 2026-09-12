@@ -1,0 +1,4 @@
+# Исключения и отложенные функции
+EXCLUDED_SAFETY: process/name/icon camouflage, cursor spoofing и shape обман, антипрокторинг/EDR bypass, инъекции, скрытый input capture, focus/visibility API подмена, обход CSP/sandbox/copy rules, session-cookie обход официального API, закрытый scraping, нелицензированные данные.
+DEFERRED/outside v1: multi-tenant auth/billing/subscriptions/device binding, Windows installer/output selection, публичные менторы/рейтинги/платежи, внешняя база историй/вопросов, обязательный backend. Личные аналоги контактов/вопросов/трекинга сохраняются в P1/P2.
+BLOCKED_EXTERNAL: официальный job connector/auto-boost — площадка и разрешённые scopes/terms не выбраны. Отсутствие ключа не блокирует demo. Отсутствие Xcode блокирует штатную Swift 6 сборку, но не документы/совместимый локальный proof.
