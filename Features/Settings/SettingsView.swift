@@ -68,6 +68,25 @@ struct DiagnosticsView: View {
                 Text("Только статус разрешений. Проверка не начинает запись. Accessibility и мониторинг ввода не требуются.")
                 Text("Тест звука и совместимости с трансляцией пока не реализованы. Они появятся с аудиозахватом и оверлеем.").foregroundStyle(.secondary)
             }
+            Section("Локальная производительность") {
+                latencyRows(title: "STT", first: model.transcription.lastFirstEventMilliseconds,
+                            total: model.transcription.lastRequestMilliseconds,
+                            queue: model.transcription.lastQueueWaitMilliseconds,
+                            firstLabel: "первое событие",
+                            succeeded: model.transcription.lastRequestSucceeded)
+                latencyRows(title: "LLM", first: model.conversation.lastFirstTokenMilliseconds,
+                            total: model.conversation.lastLLMRequestMilliseconds,
+                            firstLabel: "первый токен",
+                            succeeded: model.conversation.lastLLMRequestSucceeded)
+                Button("Очистить измерения") {
+                    model.transcription.clearLatencyMetrics()
+                    model.conversation.clearLatencyMetrics()
+                }
+                .disabled((model.transcription.lastRequestMilliseconds == nil && model.conversation.lastLLMRequestMilliseconds == nil) ||
+                          model.transcription.isBusy || model.conversation.isGenerating)
+                Text("Значения хранятся только в памяти до очистки или перезапуска. Текст, аудио, изображения, URL и ключи в измерения не входят.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Этот Mac") {
                 LabeledContent("macOS", value: ProcessInfo.processInfo.operatingSystemVersionString)
                 LabeledContent("Оперативная память", value: "\(ProcessInfo.processInfo.physicalMemory / 1_073_741_824) ГБ")
@@ -79,6 +98,18 @@ struct DiagnosticsView: View {
     private func openSettings(screen: Bool) {
         if !model.permissions.openSettings(screen: screen) {
             model.notice = "Откройте Системные настройки → Конфиденциальность и безопасность вручную."
+        }
+    }
+    @ViewBuilder
+    private func latencyRows(title: String, first: Int?, total: Int?, queue: Int? = nil,
+                             firstLabel: String, succeeded: Bool?) -> some View {
+        if let total {
+            LabeledContent("\(title): результат", value: succeeded == true ? "Успешно" : "Не завершён")
+            if let queue { LabeledContent("\(title): очередь", value: "\(queue) мс") }
+            if let first { LabeledContent("\(title): \(firstLabel)", value: "\(first) мс") }
+            LabeledContent("\(title): полностью", value: "\(total) мс")
+        } else {
+            LabeledContent(title, value: "Нет измерений")
         }
     }
 }

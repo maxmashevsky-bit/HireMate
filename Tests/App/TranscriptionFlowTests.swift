@@ -23,7 +23,7 @@ final class TranscriptionFlowTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(total, first)
         XCTAssertEqual(model.lastRequestSucceeded, true)
         XCTAssertNil(model.lastQueueWaitMilliseconds)
-        model.reset()
+        model.clearLatencyMetrics()
         XCTAssertNil(model.lastRequestMilliseconds)
     }
     @MainActor

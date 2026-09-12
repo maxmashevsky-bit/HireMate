@@ -24,7 +24,7 @@ final class ConversationFlowTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(first, 15)
         XCTAssertGreaterThanOrEqual(total, first)
         XCTAssertEqual(model.lastLLMRequestSucceeded, true)
-        model.activateProfile(.hr)
+        model.clearLatencyMetrics()
         XCTAssertNil(model.lastLLMRequestMilliseconds)
     }
     @MainActor

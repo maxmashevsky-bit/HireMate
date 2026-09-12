@@ -266,5 +266,11 @@ final class TranscriptionModel {
         batchID = nil; batchTask?.cancel(); batchTask = nil; isBatchRunning = false; remainingCount = 0
         activeID = nil; task?.cancel(); task = nil; isRunning = false; partialText = ""; status = "Распознавание отменено"
     }
-    func reset() { cancel(); result = nil; editableText = ""; completedRequest = nil; remoteConsent = false; batchResults = []; liveDroppedCount = 0; suggestedQuestion = nil; timeline.clear(); transcriptEntries = []; includeRecentContext = false; lastQueueWaitMilliseconds = nil; lastFirstEventMilliseconds = nil; lastRequestMilliseconds = nil; lastRequestSucceeded = nil }
+    func clearLatencyMetrics() {
+        lastQueueWaitMilliseconds = nil
+        lastFirstEventMilliseconds = nil
+        lastRequestMilliseconds = nil
+        lastRequestSucceeded = nil
+    }
+    func reset() { cancel(); result = nil; editableText = ""; completedRequest = nil; remoteConsent = false; batchResults = []; liveDroppedCount = 0; suggestedQuestion = nil; timeline.clear(); transcriptEntries = []; includeRecentContext = false; clearLatencyMetrics() }
 }

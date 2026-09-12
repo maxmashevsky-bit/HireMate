@@ -147,7 +147,7 @@ final class ConversationModel {
             pendingChatID = nil; retrievedNotes = []; includedNoteIDs = []; requestedTranscriptCharacters = 0; includedTranscriptCharacters = 0
             contextWasTruncated = false; estimatedTokens = 0
             actualInputTokens = nil; actualOutputTokens = nil
-            clearLLMMetrics()
+            clearLatencyMetrics()
             status = "Поддиалог создан"
         } catch {
             if navigationID == navigation { status = "Поддиалог не сохранён. Текущий разговор и черновик сохранены." }
@@ -175,7 +175,7 @@ final class ConversationModel {
             else { loaded = try await repository.messages(subchatID: id, meetingID: parent.id) }
             guard navigationID == navigation else { return }
             activeChatID = id; messages = loaded; retrievedNotes = []; includedNoteIDs = []; requestedTranscriptCharacters = 0; includedTranscriptCharacters = 0; attachment = nil; draft = ""; streamingText = ""
-            clearLLMMetrics()
+            clearLatencyMetrics()
         } catch { if navigationID == navigation { status = "Не удалось открыть поддиалог." } }
     }
     func renameActiveChat(_ name: String) async {
@@ -216,7 +216,7 @@ final class ConversationModel {
             failedMessageWrites = failedMessageWrites.filter { $0.value.answer.subchatID != deleted }
             activeChatID = next.id; messages = loaded; draft = ""; attachment = nil
             pendingChatID = nil; retrievedNotes = []; includedNoteIDs = []; requestedTranscriptCharacters = 0; includedTranscriptCharacters = 0; streamingText = ""
-            clearLLMMetrics()
+            clearLatencyMetrics()
             status = "Поддиалог удалён"
         } catch { if navigationID == navigation { status = "Поддиалог не удалён." } }
     }
@@ -296,7 +296,7 @@ final class ConversationModel {
             includedTranscriptCharacters = textPrompt.includedTranscriptCharacters
             contextWasTruncated = prompt.wasTruncated; estimatedTokens = prompt.estimatedInputTokens
             actualInputTokens = nil; actualOutputTokens = nil
-            clearLLMMetrics()
+            clearLatencyMetrics()
             let user = ChatMessage(subchatID: activeChatID, role: .user, content: question + (includedImage == nil ? "" : "\n\n[Приложен просмотренный снимок; изображение не сохраняется в истории.]"), isDemo: configuration.mode == .demo)
             messages.append(user); if includedImage != nil { attachment = nil }; draft = ""; streamingText = ""; isGenerating = true
             requestID = prompt.id
@@ -417,10 +417,10 @@ final class ConversationModel {
         retrievedNotes = []; includedNoteIDs = []; requestedTranscriptCharacters = 0
         contextWasTruncated = false; status = next.isEphemeral ? "История только в памяти" : "Встреча сохраняется локально"
         includedTranscriptCharacters = 0
-        clearLLMMetrics()
+        clearLatencyMetrics()
     }
-    private func clearLLMMetrics() {
-        generationStartedAt = nil
+    func clearLatencyMetrics() {
+        if !isGenerating { generationStartedAt = nil }
         lastFirstTokenMilliseconds = nil
         lastLLMRequestMilliseconds = nil
         lastLLMRequestSucceeded = nil
