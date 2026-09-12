@@ -6,6 +6,7 @@ struct TranscriptionView: View {
     @Bindable var app: AppModel
     @State private var pendingBatch: [AudioSegment] = []
     @State private var confirmBatch = false
+    @State private var confirmLive = false
     var body: some View {
         @Bindable var transcription = app.transcription
         Form {
@@ -16,7 +17,7 @@ struct TranscriptionView: View {
                     LabeledContent("Длительность", value: "\(segment.duration.formatted(.number.precision(.fractionLength(1)))) с")
                     Picker("Язык", selection: $transcription.language) {
                         ForEach(TranscriptionLanguage.allCases) { Text($0.title).tag($0) }
-                    }.disabled(transcription.isBusy)
+                    }.disabled(transcription.isBusy || transcription.isLiveEnabled)
                     if app.providerSettings.configuration.mode == .remote {
                         Text(app.providerSettings.configuration.baseURL).font(.caption).textSelection(.enabled)
                         Toggle("Разрешаю отправить выбранный аудиофрагмент этому провайдеру", isOn: $transcription.remoteConsent)
@@ -24,7 +25,7 @@ struct TranscriptionView: View {
                     HStack {
                         Button("Распознать") {
                             transcription.start(segment: segment, configuration: app.providerSettings.configuration, vocabulary: app.conversation.profile.technologies)
-                        }.disabled(transcription.isBusy)
+                        }.disabled(transcription.isBusy || transcription.isLiveEnabled)
                     }
                 } else { Text("Сначала выделите вопрос или возьмите фрагмент из буфера в разделе «Звук».") }
                 Text(transcription.status).foregroundStyle(.secondary)
@@ -36,7 +37,7 @@ struct TranscriptionView: View {
                 Button("Распознать накопленные фрагменты (\(app.audio.segments.count))") {
                     pendingBatch = app.audio.segments
                     confirmBatch = true
-                }.disabled(transcription.isBusy || app.audio.segments.isEmpty)
+                }.disabled(transcription.isBusy || transcription.isLiveEnabled || app.audio.segments.isEmpty)
                 if transcription.isBatchRunning { Text("Осталось фрагментов: \(transcription.remainingCount)") }
                 ForEach(transcription.batchResults) { entry in
                     VStack(alignment: .leading) {
@@ -45,6 +46,28 @@ struct TranscriptionView: View {
                         Button("Открыть текст для правки") { transcription.selectBatchResult(entry) }
                             .disabled(transcription.isBusy)
                     }
+                }
+            }
+            Section("Новые фрагменты во время захвата") {
+                Text("Opt-in режим принимает только завершённые аудиофрагменты, обрабатывает их последовательно и не запускает LLM. В ожидании хранится максимум 5 фрагментов.")
+                    .font(.caption)
+                if transcription.isLiveEnabled {
+                    LabeledContent("В очереди", value: "\(transcription.liveQueuedCount)")
+                    if transcription.liveDroppedCount > 0 {
+                        LabeledContent("Пропущено из-за перегрузки", value: "\(transcription.liveDroppedCount)")
+                            .foregroundStyle(.orange)
+                    }
+                    Button("Остановить автоматическую очередь", role: .destructive) {
+                        transcription.disableLive()
+                    }
+                } else {
+                    Button("Включить автоматическую очередь") {
+                        if app.providerSettings.configuration.mode == .remote { confirmLive = true }
+                        else {
+                            transcription.enableLive(configuration: app.providerSettings.configuration,
+                                                     vocabulary: app.conversation.profile.technologies)
+                        }
+                    }.disabled(transcription.isBusy)
                 }
             }
             Section("Текст") {
@@ -70,6 +93,16 @@ struct TranscriptionView: View {
                 Text(app.providerSettings.configuration.mode == .demo
                      ? "Демо покажет учебные тексты без анализа аудио и без сети. Текущие правки текста будут заменены."
                      : "Все перечисленные фрагменты микрофона и системы будут отправлены на \(app.providerSettings.configuration.baseURL). Текущие правки текста будут заменены.")
+            }
+            .confirmationDialog("Включить автоматическую отправку фрагментов?", isPresented: $confirmLive) {
+                Button("Включить") {
+                    transcription.enableLive(configuration: app.providerSettings.configuration,
+                                             vocabulary: app.conversation.profile.technologies,
+                                             remoteConsent: true)
+                }
+                Button("Отмена", role: .cancel) {}
+            } message: {
+                Text("Каждый новый завершённый аудиофрагмент будет отдельно отправлен на \(app.providerSettings.configuration.baseURL), пока вы не отключите режим или не произойдёт ошибка. Ответы в LLM автоматически не отправляются.")
             }
     }
 }

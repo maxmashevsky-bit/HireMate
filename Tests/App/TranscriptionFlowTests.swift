@@ -10,6 +10,73 @@ private struct NoTranscriptionSecrets: SecureSecretStore {
 
 final class TranscriptionFlowTests: XCTestCase {
     @MainActor
+    func testLiveQueueProcessesUniqueSegmentsInOrderAndKeepsSources() async throws {
+        var calls = 0
+        let model = TranscriptionModel(secrets: NoTranscriptionSecrets(), network: NetworkClient(), serviceFactory: { _ in
+            calls += 1; return ScriptedTranscription()
+        })
+        XCTAssertTrue(model.enableLive(configuration: ModelConfiguration(), vocabulary: ["Go"]))
+        let mic = AudioSegment(source: .microphone, startedAt: 1, samples: [0.1], reason: "Тест")
+        let system = AudioSegment(source: .system, startedAt: 2, samples: [0.1], reason: "Тест")
+        model.enqueueLive(mic); model.enqueueLive(mic); model.enqueueLive(system)
+        try await eventually { model.batchResults.count == 2 && !model.isRunning }
+        XCTAssertEqual(calls, 2)
+        XCTAssertEqual(model.batchResults.map(\.source), [.microphone, .system])
+        XCTAssertTrue(model.isLiveEnabled)
+        model.disableLive()
+        XCTAssertFalse(model.isLiveEnabled)
+    }
+
+    @MainActor
+    func testLiveQueueStopsOnFailureAndDiscardsPendingWork() async throws {
+        var calls = 0
+        let model = TranscriptionModel(secrets: NoTranscriptionSecrets(), network: NetworkClient(), serviceFactory: { _ in
+            calls += 1; return ScriptedTranscription(failAfterFinal: true)
+        })
+        XCTAssertTrue(model.enableLive(configuration: ModelConfiguration(), vocabulary: []))
+        for index in 0..<3 {
+            model.enqueueLive(AudioSegment(source: .system, startedAt: Double(index), samples: [0.1], reason: "Тест"))
+        }
+        try await eventually { !model.isLiveEnabled }
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(model.liveQueuedCount, 0)
+        XCTAssertTrue(model.batchResults.isEmpty)
+    }
+
+    @MainActor
+    func testLiveQueueBoundsPendingWorkAndCancelRejectsLateResult() async throws {
+        let model = TranscriptionModel(secrets: NoTranscriptionSecrets(), network: NetworkClient(), serviceFactory: { _ in
+            FakeTranscriptionService()
+        })
+        XCTAssertTrue(model.enableLive(configuration: ModelConfiguration(), vocabulary: []))
+        model.enqueueLive(AudioSegment(source: .system, startedAt: 0, samples: [0.1], reason: "Тест"))
+        try await eventually { model.isRunning }
+        for index in 1...6 {
+            model.enqueueLive(AudioSegment(source: .system, startedAt: Double(index), samples: [0.1], reason: "Тест"))
+        }
+        XCTAssertEqual(model.liveQueuedCount, 5)
+        XCTAssertEqual(model.liveDroppedCount, 1)
+        model.disableLive()
+        try await Task.sleep(for: .milliseconds(650))
+        XCTAssertNil(model.result)
+        XCTAssertTrue(model.batchResults.isEmpty)
+    }
+
+    @MainActor
+    func testLiveRemoteModeNeedsDedicatedConsentAndValidConfiguration() {
+        let model = TranscriptionModel(secrets: NoTranscriptionSecrets(), network: NetworkClient(), serviceFactory: { _ in
+            XCTFail("Фрагменты не добавлялись"); return ScriptedTranscription()
+        })
+        var remote = ModelConfiguration(); remote.mode = .remote
+        remote.baseURL = "https://example.com/v1"; remote.transcriptionModel = "stt-test"
+        model.remoteConsent = true
+        XCTAssertFalse(model.enableLive(configuration: remote, vocabulary: []))
+        XCTAssertTrue(model.enableLive(configuration: remote, vocabulary: [], remoteConsent: true))
+        model.disableLive()
+        remote.baseURL = "http://example.com/v1"
+        XCTAssertFalse(model.enableLive(configuration: remote, vocabulary: [], remoteConsent: true))
+    }
+    @MainActor
     func testBatchKeepsSourcesAndDeduplicatesSegments() async throws {
         var calls = 0
         let model = TranscriptionModel(secrets: NoTranscriptionSecrets(), network: NetworkClient(), serviceFactory: { _ in
@@ -118,6 +185,14 @@ final class TranscriptionFlowTests: XCTestCase {
     private func waitForResult(_ model: TranscriptionModel) async throws {
         let deadline = ContinuousClock.now + .seconds(4)
         while model.isBusy {
+            guard ContinuousClock.now < deadline else { throw LocalStoreError.unavailable }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+    @MainActor
+    private func eventually(_ predicate: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(4)
+        while !predicate() {
             guard ContinuousClock.now < deadline else { throw LocalStoreError.unavailable }
             try await Task.sleep(for: .milliseconds(10))
         }

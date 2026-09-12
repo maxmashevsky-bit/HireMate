@@ -14,9 +14,23 @@ final class TranscriptionModel {
     private(set) var isBatchRunning = false
     private(set) var batchResults: [TranscriptResult] = []
     private(set) var remainingCount = 0
+    private(set) var isLiveEnabled = false
+    private(set) var liveQueuedCount = 0
+    private(set) var liveDroppedCount = 0
     var isBusy: Bool { isRunning || isBatchRunning }
     private var batchTask: Task<Void, Never>?
     private var batchID: UUID?
+    private var liveQueue: [AudioSegment] = []
+    private var liveSeenIDs = Set<UUID>()
+    private var liveTask: Task<Void, Never>?
+    private var liveID: UUID?
+    private struct LiveSettings {
+        let configuration: ModelConfiguration
+        let vocabulary: [String]
+        let language: TranscriptionLanguage
+        let consent: Bool
+    }
+    private var liveSettings: LiveSettings?
     private let secrets: any SecureSecretStore
     private let network: NetworkClient
     private let serviceFactory: ((ModelConfiguration) -> any TranscriptionService)?
@@ -37,13 +51,13 @@ final class TranscriptionModel {
     }
 
     func start(segment: AudioSegment, configuration: ModelConfiguration, vocabulary: [String]) {
-        guard !isBusy else { return }
+        guard !isBusy, !isLiveEnabled else { return }
         perform(segment: segment, configuration: configuration, vocabulary: vocabulary, requestedLanguage: language, consent: remoteConsent)
     }
 
     // Снимок очереди: новые аудиофрагменты не добавляются без следующего действия пользователя.
     func startBatch(segments: [AudioSegment], configuration: ModelConfiguration, vocabulary: [String], remoteBatchConsent: Bool = false) {
-        guard !isBusy else { return }
+        guard !isBusy, !isLiveEnabled else { return }
         guard !segments.isEmpty, segments.count <= 6,
               segments.allSatisfy({ $0.duration.isFinite && $0.duration > 0 && $0.duration <= 60 && $0.samples.count <= 960_000 }) else {
             status = "Очередь допускает от 1 до 6 фрагментов длительностью до 60 секунд каждый."; return
@@ -78,6 +92,74 @@ final class TranscriptionModel {
     func selectBatchResult(_ selected: TranscriptResult) {
         guard !isBusy, batchResults.contains(where: { $0.id == selected.id }) else { return }
         result = selected; editableText = selected.text
+    }
+
+    @discardableResult
+    func enableLive(configuration: ModelConfiguration, vocabulary: [String], remoteConsent: Bool = false) -> Bool {
+        guard !isBusy, !isLiveEnabled else { return false }
+        guard configuration.mode == .demo || remoteConsent else {
+            status = "Подтвердите автоматическую отправку новых аудиофрагментов этому провайдеру."
+            return false
+        }
+        if configuration.mode == .remote {
+            do { try configuration.validate(forTranscription: true) }
+            catch {
+                status = (error as? ProviderError)?.localizedDescription ?? "Проверьте настройки распознавания."
+                return false
+            }
+        }
+        liveSettings = LiveSettings(configuration: configuration, vocabulary: vocabulary,
+                                    language: language, consent: remoteConsent)
+        liveQueue = []; liveSeenIDs = []; liveQueuedCount = 0; liveDroppedCount = 0
+        liveID = UUID(); isLiveEnabled = true
+        status = configuration.mode == .demo
+            ? "Автоочередь включена в демо: звук не анализируется и не отправляется в сеть."
+            : "Автоочередь включена: каждый новый фрагмент отправляется отдельно."
+        return true
+    }
+
+    func enqueueLive(_ segment: AudioSegment) {
+        guard isLiveEnabled, let settings = liveSettings,
+              segment.duration.isFinite, segment.duration > 0, segment.duration <= 60,
+              segment.samples.count <= 960_000, liveSeenIDs.insert(segment.id).inserted else { return }
+        guard liveQueue.count < 5 else {
+            liveDroppedCount += 1
+            status = "Автоочередь заполнена. Новый фрагмент пропущен; остановите захват или дождитесь распознавания."
+            return
+        }
+        liveQueue.append(segment); liveQueuedCount = liveQueue.count
+        guard liveTask == nil, let id = liveID else { return }
+        liveTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if liveID == id { liveTask = nil } }
+            while liveID == id, isLiveEnabled, !Task.isCancelled, !liveQueue.isEmpty {
+                let next = liveQueue.removeFirst(); liveQueuedCount = liveQueue.count
+                perform(segment: next, configuration: settings.configuration, vocabulary: settings.vocabulary,
+                        requestedLanguage: settings.language, consent: settings.consent)
+                let current = task
+                await current?.value
+                guard liveID == id, isLiveEnabled, !Task.isCancelled else { return }
+                guard let result, result.segmentID == next.id else {
+                    stopLive(clearStatus: false)
+                    return
+                }
+                batchResults.append(result)
+                if batchResults.count > 50 { batchResults.removeFirst(batchResults.count - 50) }
+            }
+        }
+    }
+
+    func disableLive() {
+        guard isLiveEnabled else { return }
+        stopLive(clearStatus: true)
+    }
+
+    private func stopLive(clearStatus: Bool) {
+        isLiveEnabled = false; liveID = nil; liveSettings = nil
+        liveQueue = []; liveQueuedCount = 0; liveSeenIDs = []
+        liveTask?.cancel(); liveTask = nil
+        activeID = nil; task?.cancel(); task = nil; isRunning = false; partialText = ""
+        if clearStatus { status = "Автоматическая очередь остановлена." }
     }
 
     private func perform(segment: AudioSegment, configuration: ModelConfiguration, vocabulary: [String],
@@ -127,8 +209,9 @@ final class TranscriptionModel {
         }
     }
     func cancel() {
+        if isLiveEnabled { stopLive(clearStatus: false) }
         batchID = nil; batchTask?.cancel(); batchTask = nil; isBatchRunning = false; remainingCount = 0
         activeID = nil; task?.cancel(); task = nil; isRunning = false; partialText = ""; status = "Распознавание отменено"
     }
-    func reset() { cancel(); result = nil; editableText = ""; completedRequest = nil; remoteConsent = false; batchResults = [] }
+    func reset() { cancel(); result = nil; editableText = ""; completedRequest = nil; remoteConsent = false; batchResults = []; liveDroppedCount = 0 }
 }

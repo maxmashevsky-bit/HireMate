@@ -50,6 +50,9 @@ final class AppModel {
         showOnboarding = !resolvedPreferences.onboardingCompleted
         refreshPermissions()
         overlay.connect(model: self)
+        audio.onSegment = { [weak self] segment in
+            self?.transcription.enqueueLive(segment)
+        }
         conversation.onCompletedAnswer = { [weak self] text in
             guard let self, speech.autoRead else { return }
             if audio.isRunning && !speech.routingAcknowledged {
