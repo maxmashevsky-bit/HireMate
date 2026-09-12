@@ -23,3 +23,5 @@ Phase 16: local mentor history only, no external publication/payments.
 
 ## Performance
 Цели до измерения: idle CPU <3%, memory <250 MB, 60 FPS, main thread stall <100 ms, DB p95 <100 ms, bounded long-meeting memory. STT и LLM latency раздельно. Unit/integration: XCTest. UI automation/manual результаты не подменяют unit. Нет paid API в тестах.
+
+Автоматизированный baseline длительной аудиосессии прогоняет 10 минут синтетических mono/16 kHz кадров: ring buffer не превышает 60 секунд, ручные сегменты не превышают 960 000 samples/60 секунд, one-shot читает только настроенное недавнее окно. Это проверка алгоритмических границ без устройства и не заменяет runtime-проверку dropouts/памяти.

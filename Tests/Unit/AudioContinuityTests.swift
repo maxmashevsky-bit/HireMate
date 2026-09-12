@@ -38,4 +38,28 @@ final class AudioContinuityTests: XCTestCase {
         let update = try await pipeline.process(frame(50))
         XCTAssertEqual(update.bufferedSeconds, 0.1, accuracy: 0.001)
     }
+
+    func testTenMinuteManualSessionKeepsAudioMemoryBounded() async throws {
+        let pipeline = AudioPipeline()
+        await pipeline.configure(AudioPipelineConfiguration(), mode: .manual)
+        await pipeline.beginManual()
+        let frameSamples = Array(repeating: Float(0.2), count: 8_000)
+        var completedSegments = 0
+        var maximumBufferedSeconds = 0.0
+        for index in 0..<1_200 {
+            let update = try await pipeline.process(AudioFrame(timestamp: Double(index) * 0.5,
+                                                               source: .microphone, sampleRate: 16_000,
+                                                               samples: frameSamples))
+            maximumBufferedSeconds = max(maximumBufferedSeconds, update.bufferedSeconds)
+            if let segment = update.segment {
+                completedSegments += 1
+                XCTAssertLessThanOrEqual(segment.samples.count, 960_000)
+                XCTAssertLessThanOrEqual(segment.duration, 60)
+            }
+        }
+        XCTAssertEqual(completedSegments, 10)
+        XCTAssertLessThanOrEqual(maximumBufferedSeconds, 60)
+        let recent = await pipeline.oneShot()
+        XCTAssertEqual(recent.first?.duration ?? 0, 20, accuracy: 0.001)
+    }
 }
