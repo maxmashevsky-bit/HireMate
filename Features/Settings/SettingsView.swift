@@ -87,6 +87,25 @@ struct DiagnosticsView: View {
                 Text("Значения хранятся только в памяти до очистки или перезапуска. Текст, аудио, изображения, URL и ключи в измерения не входят.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Локальная база") {
+                if let result = model.databaseLatency {
+                    LabeledContent("Количество чтений", value: "\(result.sampleCount)")
+                    LabeledContent("Минимум", value: milliseconds(result.minimumMilliseconds))
+                    LabeledContent("p95", value: milliseconds(result.p95Milliseconds))
+                        .foregroundStyle(result.p95Milliseconds < 100 ? Color.primary : .orange)
+                    LabeledContent("Максимум", value: milliseconds(result.maximumMilliseconds))
+                    Text(result.p95Milliseconds < 100 ? "Текущий замер укладывается в целевой бюджет <100 мс." : "Текущий замер выше целевого бюджета <100 мс.")
+                        .font(.caption).foregroundStyle(result.p95Milliseconds < 100 ? Color.secondary : .orange)
+                } else {
+                    Text("Замер ещё не запускался.").foregroundStyle(.secondary)
+                }
+                Button(model.isMeasuringDatabase ? "Измеряем…" : "Измерить 20 локальных чтений") {
+                    Task { await model.measureDatabaseLatency() }
+                }
+                .disabled(model.isMeasuringDatabase)
+                Text("Тест только читает список встреч активного профиля. Он не выводит содержимое записей и не использует сеть.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Этот Mac") {
                 LabeledContent("macOS", value: ProcessInfo.processInfo.operatingSystemVersionString)
                 LabeledContent("Оперативная память", value: "\(ProcessInfo.processInfo.physicalMemory / 1_073_741_824) ГБ")
@@ -111,5 +130,8 @@ struct DiagnosticsView: View {
         } else {
             LabeledContent(title, value: "Нет измерений")
         }
+    }
+    private func milliseconds(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(3))) + " мс"
     }
 }

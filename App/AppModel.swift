@@ -20,6 +20,7 @@ final class AppModel {
     let secrets: any SecureSecretStore
     let conversation: ConversationModel
     let notes: NotesModel
+    private let databaseBenchmark: LocalDatabaseBenchmark
     private let logger = Logger(subsystem: "dev.maxmashevsky.MaxInterviewCopilot", category: "lifecycle")
     var theme: AppTheme { didSet { preferences.theme = theme } }
     var profile: ProfileID { didSet { preferences.profile = profile; transcription.reset(); screenshot.clear(); speech.stop(); pendingQuickAction = nil; notes.activateProfile(profile); conversation.activateProfile(profile)
@@ -33,6 +34,8 @@ final class AppModel {
     var microphone: PermissionState = .unconfirmed
     var screen: PermissionState = .unconfirmed
     var notice: String?
+    private(set) var databaseLatency: LatencySummary?
+    private(set) var isMeasuringDatabase = false
 
     init(preferences: PreferencesStore? = nil,
          permissions: (any PermissionService)? = nil,
@@ -43,6 +46,7 @@ final class AppModel {
         self.secrets = secrets ?? KeychainSecretStore()
         self.transcription = TranscriptionModel(secrets: self.secrets, network: network)
         let repository = GRDBMeetingRepository()
+        self.databaseBenchmark = LocalDatabaseBenchmark(repository: repository)
         self.notes = NotesModel(profile: resolvedPreferences.profile, repository: repository)
         self.conversation = ConversationModel(profileID: resolvedPreferences.profile, repository: repository, secrets: self.secrets, network: network, noteSearch: repository)
         theme = resolvedPreferences.theme
@@ -115,5 +119,16 @@ final class AppModel {
     func deleteSecret() {
         do { try secrets.delete(); notice = "Ключ удалён из macOS Keychain." }
         catch { notice = error.localizedDescription }
+    }
+    func measureDatabaseLatency() async {
+        guard !isMeasuringDatabase else { return }
+        isMeasuringDatabase = true
+        defer { isMeasuringDatabase = false }
+        do {
+            databaseLatency = try await databaseBenchmark.measureMeetings(profile: profile)
+        } catch {
+            databaseLatency = nil
+            notice = "Не удалось измерить локальную базу. Данные не изменялись."
+        }
     }
 }

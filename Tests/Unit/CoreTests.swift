@@ -3,6 +3,22 @@ import CopilotCore
 
 final class CoreTests: XCTestCase {
     @MainActor
+    func testLocalDatabaseBenchmarkUsesNearestRankP95AndMeetsPersonalBudget() async throws {
+        let summary = LatencySummary(samplesMilliseconds: [10, 1, 3, 2, 100, 4, 5, 6, 7, 8,
+                                                              9, 11, 12, 13, 14, 15, 16, 17, 18, 19])
+        XCTAssertEqual(summary.sampleCount, 20)
+        XCTAssertEqual(summary.p95Milliseconds, 19)
+
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("hiremate-db-benchmark-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = GRDBMeetingRepository(directory: directory)
+        let result = try await LocalDatabaseBenchmark(repository: repository).measureMeetings(profile: .technical)
+        XCTAssertEqual(result.sampleCount, 20)
+        XCTAssertLessThan(result.p95Milliseconds, 100)
+        XCTAssertLessThanOrEqual(result.minimumMilliseconds, result.p95Milliseconds)
+        XCTAssertLessThanOrEqual(result.p95Milliseconds, result.maximumMilliseconds)
+    }
+    @MainActor
     func testDatabaseMeetingIsolationAndCascade() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("hiremate-db-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

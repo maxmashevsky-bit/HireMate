@@ -25,3 +25,5 @@ Phase 16: local mentor history only, no external publication/payments.
 Цели до измерения: idle CPU <3%, memory <250 MB, 60 FPS, main thread stall <100 ms, DB p95 <100 ms, bounded long-meeting memory. STT и LLM latency раздельно. Unit/integration: XCTest. UI automation/manual результаты не подменяют unit. Нет paid API в тестах.
 
 Автоматизированный baseline длительной аудиосессии прогоняет 10 минут синтетических mono/16 kHz кадров: ring buffer не превышает 60 секунд, ручные сегменты не превышают 960 000 samples/60 секунд, one-shot читает только настроенное недавнее окно. Это проверка алгоритмических границ без устройства и не заменяет runtime-проверку dropouts/памяти.
+
+Ручной DB benchmark выполняет 20 последовательных чтений списка встреч активного профиля, считает p95 методом nearest-rank и показывает минимум/максимум. Runtime 12 сентября 2026 на личной базе: min 0.198 мс, p95 0.360 мс, max 8.697 мс. Замер не изменяет данные и не выводит их содержимое.
