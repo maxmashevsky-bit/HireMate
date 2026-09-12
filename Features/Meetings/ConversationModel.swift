@@ -35,17 +35,22 @@ final class ConversationModel {
     private(set) var actualOutputTokens: Int?
     private(set) var includedTranscriptCharacters = 0
     private(set) var requestedTranscriptCharacters = 0
+    private(set) var lastFirstTokenMilliseconds: Int?
+    private(set) var lastLLMRequestMilliseconds: Int?
+    private(set) var lastLLMRequestSucceeded: Bool?
     private let repository: any MeetingRepository
     private let secrets: any SecureSecretStore
     private let network: NetworkClient
     private let assembler: any ContextAssembler
     private let noteSearch: (any NoteSearchService)?
+    private let providerFactory: ((ModelConfiguration) -> any StreamingLLMProvider)?
     private var retrieval: Task<Void, Never>?
     private var retrievalID = UUID()
     private(set) var retrievedNotes: [NoteFragment] = []
     private(set) var includedNoteIDs: [String] = []
     private var memory: [UUID: [ChatMessage]] = [:]
     private var generation: Task<Void, Never>?
+    private var generationStartedAt: ContinuousClock.Instant?
     private struct GenerationWork {
         let meetingID: UUID
         let chatID: UUID
@@ -64,8 +69,10 @@ final class ConversationModel {
     var isSavingMessages: Bool { !messageWrites.isEmpty }
 
     init(profileID: ProfileID, repository: any MeetingRepository, secrets: any SecureSecretStore,
-         network: NetworkClient, assembler: any ContextAssembler = BoundedContextAssembler(), noteSearch: (any NoteSearchService)? = nil) {
+         network: NetworkClient, assembler: any ContextAssembler = BoundedContextAssembler(), noteSearch: (any NoteSearchService)? = nil,
+         providerFactory: ((ModelConfiguration) -> any StreamingLLMProvider)? = nil) {
         self.repository = repository; self.secrets = secrets; self.network = network; self.assembler = assembler; self.noteSearch = noteSearch
+        self.providerFactory = providerFactory
         let meeting = Meeting(profileID: profileID, title: "Демонстрация", isEphemeral: true)
         let chat = Subchat(meetingID: meeting.id, title: "Основной")
         self.meeting = meeting; chats = [chat]; activeChatID = chat.id
@@ -140,6 +147,7 @@ final class ConversationModel {
             pendingChatID = nil; retrievedNotes = []; includedNoteIDs = []; requestedTranscriptCharacters = 0; includedTranscriptCharacters = 0
             contextWasTruncated = false; estimatedTokens = 0
             actualInputTokens = nil; actualOutputTokens = nil
+            clearLLMMetrics()
             status = "Поддиалог создан"
         } catch {
             if navigationID == navigation { status = "Поддиалог не сохранён. Текущий разговор и черновик сохранены." }
@@ -167,6 +175,7 @@ final class ConversationModel {
             else { loaded = try await repository.messages(subchatID: id, meetingID: parent.id) }
             guard navigationID == navigation else { return }
             activeChatID = id; messages = loaded; retrievedNotes = []; includedNoteIDs = []; requestedTranscriptCharacters = 0; includedTranscriptCharacters = 0; attachment = nil; draft = ""; streamingText = ""
+            clearLLMMetrics()
         } catch { if navigationID == navigation { status = "Не удалось открыть поддиалог." } }
     }
     func renameActiveChat(_ name: String) async {
@@ -207,6 +216,7 @@ final class ConversationModel {
             failedMessageWrites = failedMessageWrites.filter { $0.value.answer.subchatID != deleted }
             activeChatID = next.id; messages = loaded; draft = ""; attachment = nil
             pendingChatID = nil; retrievedNotes = []; includedNoteIDs = []; requestedTranscriptCharacters = 0; includedTranscriptCharacters = 0; streamingText = ""
+            clearLLMMetrics()
             status = "Поддиалог удалён"
         } catch { if navigationID == navigation { status = "Поддиалог не удалён." } }
     }
@@ -286,12 +296,15 @@ final class ConversationModel {
             includedTranscriptCharacters = textPrompt.includedTranscriptCharacters
             contextWasTruncated = prompt.wasTruncated; estimatedTokens = prompt.estimatedInputTokens
             actualInputTokens = nil; actualOutputTokens = nil
+            clearLLMMetrics()
             let user = ChatMessage(subchatID: activeChatID, role: .user, content: question + (includedImage == nil ? "" : "\n\n[Приложен просмотренный снимок; изображение не сохраняется в истории.]"), isDemo: configuration.mode == .demo)
             messages.append(user); if includedImage != nil { attachment = nil }; draft = ""; streamingText = ""; isGenerating = true
             requestID = prompt.id
             let parent = meeting
-            let provider: any StreamingLLMProvider = configuration.mode == .demo ? FakeStreamingProvider()
-                : OpenAICompatibleLLMProvider(configuration: configuration, secrets: secrets, network: network)
+            let provider: any StreamingLLMProvider
+            if let providerFactory { provider = providerFactory(configuration) }
+            else if configuration.mode == .demo { provider = FakeStreamingProvider() }
+            else { provider = OpenAICompatibleLLMProvider(configuration: configuration, secrets: secrets, network: network) }
             status = configuration.mode == .demo ? "Учебный образец без анализа вопроса" : "Запрос отправляется выбранному API"
             let task = Task { [weak self] in
                 guard let self else { return }
@@ -302,23 +315,35 @@ final class ConversationModel {
                     savedUserMessage = true
                     try Task.checkCancellation()
                     guard requestID == prompt.id else { return }
+                    let startedAt = ContinuousClock.now
+                    generationStartedAt = startedAt
                     var completed = false
                     for try await event in provider.stream(prompt) {
                         try Task.checkCancellation()
                         guard requestID == prompt.id else { return }
                         switch event {
                         case .started: break
-                        case .textDelta(let text): streamingText += text
+                        case .textDelta(let text):
+                            if !text.isEmpty, lastFirstTokenMilliseconds == nil {
+                                lastFirstTokenMilliseconds = Self.milliseconds(startedAt.duration(to: .now))
+                            }
+                            streamingText += text
                         case .usage(let input, let output): actualInputTokens = input; actualOutputTokens = output
                         case .completed: completed = true
                         }
                     }
                     guard requestID == prompt.id else { return }
+                    lastLLMRequestMilliseconds = Self.milliseconds(startedAt.duration(to: .now))
+                    lastLLMRequestSucceeded = completed
                     finish(state: completed ? .complete : .failed, demo: configuration.mode == .demo)
                     status = completed ? (configuration.mode == .demo ? "Демонстрационный образец завершён" : "Ответ завершён") : "Поток оборвался"
                 } catch {
                     if !savedUserMessage { failedMessageWrites[user.id] = MessageWrite(answer: user, meetingID: parent.id) }
                     guard requestID == prompt.id else { return }
+                    if let startedAt = generationStartedAt {
+                        lastLLMRequestMilliseconds = Self.milliseconds(startedAt.duration(to: .now))
+                        lastLLMRequestSucceeded = false
+                    }
                     finish(state: error is CancellationError ? .cancelled : .failed, demo: configuration.mode == .demo)
                     status = (error as? ProviderError)?.localizedDescription ?? (error is CancellationError ? "Ответ остановлен" : "Не удалось сохранить или получить ответ.")
                 }
@@ -331,6 +356,10 @@ final class ConversationModel {
         if retrieval != nil { retrieval?.cancel(); retrieval = nil; retrievalID = UUID(); isLoading = false; status = "Подготовка запроса отменена" }
         guard isGenerating else { return }
         generation?.cancel()
+        if let startedAt = generationStartedAt {
+            lastLLMRequestMilliseconds = Self.milliseconds(startedAt.duration(to: .now))
+            lastLLMRequestSucceeded = false
+        }
         finish(state: .cancelled, demo: messages.last?.isDemo ?? true)
         status = "Ответ остановлен. Полученный текст сохранён в текущем поддиалоге."
     }
@@ -345,7 +374,7 @@ final class ConversationModel {
             }
         }
         memory[activeChatID] = messages
-        streamingText = ""; isGenerating = false; requestID = nil; generation = nil
+        streamingText = ""; isGenerating = false; requestID = nil; generation = nil; generationStartedAt = nil
     }
     private func queueMessageWrite(_ write: MessageWrite) {
         let id = write.answer.id
@@ -388,6 +417,18 @@ final class ConversationModel {
         retrievedNotes = []; includedNoteIDs = []; requestedTranscriptCharacters = 0
         contextWasTruncated = false; status = next.isEphemeral ? "История только в памяти" : "Встреча сохраняется локально"
         includedTranscriptCharacters = 0
+        clearLLMMetrics()
+    }
+    private func clearLLMMetrics() {
+        generationStartedAt = nil
+        lastFirstTokenMilliseconds = nil
+        lastLLMRequestMilliseconds = nil
+        lastLLMRequestSucceeded = nil
+    }
+    private static func milliseconds(_ duration: Duration) -> Int {
+        let components = duration.components
+        let value = components.seconds * 1_000 + components.attoseconds / 1_000_000_000_000_000
+        return Int(min(Int64(Int.max), max(0, value)))
     }
     func exportCurrent(markdown: Bool = false) async throws -> Data {
         // Текущие сообщения берутся из памяти: экспорт не теряет ответ при сбое записи на диск.

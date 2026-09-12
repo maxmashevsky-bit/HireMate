@@ -10,6 +10,24 @@ private final class UnusedSecrets: SecureSecretStore {
 
 final class ConversationFlowTests: XCTestCase {
     @MainActor
+    func testMeasuresFirstTokenAndCompletionWithoutRequestPayload() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let model = ConversationModel(profileID: .technical, repository: GRDBMeetingRepository(directory: directory),
+                                      secrets: UnusedSecrets(), network: NetworkClient(),
+                                      providerFactory: { _ in TimedStreamingProvider() })
+        model.draft = "Проверить локальные метрики"
+        model.send(configuration: ModelConfiguration())
+        try await waitUntil { !model.isGenerating }
+        let first = try XCTUnwrap(model.lastFirstTokenMilliseconds)
+        let total = try XCTUnwrap(model.lastLLMRequestMilliseconds)
+        XCTAssertGreaterThanOrEqual(first, 15)
+        XCTAssertGreaterThanOrEqual(total, first)
+        XCTAssertEqual(model.lastLLMRequestSucceeded, true)
+        model.activateProfile(.hr)
+        XCTAssertNil(model.lastLLMRequestMilliseconds)
+    }
+    @MainActor
     func testDeleteWaitsForPreviouslyCancelledQuestionWrite() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -251,6 +269,24 @@ final class ConversationFlowTests: XCTestCase {
         XCTAssertEqual(model.messages.last?.state, .complete)
         XCTAssertEqual(model.messages.last?.isDemo, true)
         XCTAssertTrue(model.answer.contains("подтверждённые факты"))
+    }
+}
+
+private struct TimedStreamingProvider: StreamingLLMProvider {
+    func stream(_ request: GenerationRequest) -> AsyncThrowingStream<LLMEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    continuation.yield(.started(request.id))
+                    try await Task.sleep(for: .milliseconds(25))
+                    continuation.yield(.textDelta("Ответ"))
+                    try await Task.sleep(for: .milliseconds(25))
+                    continuation.yield(.completed)
+                    continuation.finish()
+                } catch { continuation.finish(throwing: error) }
+            }
+            continuation.onTermination = { @Sendable _ in task.cancel() }
+        }
     }
 }
 
