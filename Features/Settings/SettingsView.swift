@@ -65,8 +65,31 @@ struct DiagnosticsView: View {
                 Text("Системные настройки → Конфиденциальность и безопасность → Микрофон / Запись экрана и системного аудио. Отрицательный результат проверки экрана не позволяет отличить отказ от ещё не запрошенного доступа.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Что сейчас проверяется") {
-                Text("Только статус разрешений. Проверка не начинает запись. Accessibility и мониторинг ввода не требуются.")
-                Text("Тест звука и совместимости с трансляцией пока не реализованы. Они появятся с аудиозахватом и оверлеем.").foregroundStyle(.secondary)
+                Text("Статусы разрешений, состояние рабочего окна и локальные метрики. Эти проверки не начинают захват звука или экрана.")
+                Text("Реальный тест микрофона, системного звука и совместимости с трансляцией запускается вручную в соответствующих разделах.").foregroundStyle(.secondary)
+            }
+            Section("Рабочее окно") {
+                LabeledContent("Окно подсказок", value: model.overlay.isVisible ? "Показано" : "Скрыто")
+                LabeledContent("Пропуск кликов", value: model.overlay.isClickThrough ? "Включён" : "Выключен")
+                LabeledContent("Непрозрачность", value: "\(Int(model.overlay.preferences.opacity * 100))%")
+                LabeledContent("Глобальные сочетания", value: model.overlay.preferences.shortcutsEnabled
+                               ? "\(model.overlay.hotkeys.registeredCount) зарегистрировано" : "Выключены")
+                if !model.overlay.hotkeys.issues.isEmpty {
+                    ForEach(model.overlay.hotkeys.issues, id: \.self) { issue in
+                        Text(issue).font(.caption).foregroundStyle(.orange)
+                    }
+                }
+                HStack {
+                    Button(model.overlay.isVisible ? "Скрыть рабочее окно" : "Показать рабочее окно") {
+                        model.overlay.toggle()
+                    }
+                    Button("Вернуть ввод") { model.overlay.focusInput() }
+                    Button(model.overlay.isClickThrough ? "Принимать клики" : "Пропускать клики") {
+                        model.overlay.toggleClickThrough()
+                    }.disabled(!model.overlay.isVisible)
+                }
+                Text("Рабочее окно остаётся поверх обычных окон и может быть видно в трансляции экрана. Режим пропуска кликов переключается в настройках окна или глобальным сочетанием.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Локальная производительность") {
                 latencyRows(title: "STT", first: model.transcription.lastFirstEventMilliseconds,
