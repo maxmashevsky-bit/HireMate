@@ -16,6 +16,7 @@ final class NativeAudioCapture: AudioCaptureService {
     private var engine: AVAudioEngine?
     private var stream: SCStream?
     private var output: SystemAudioOutput?
+    private var microphoneOutput: MicrophoneAudioOutput?
     private var continuation: AsyncThrowingStream<AudioFrame, Error>.Continuation?
     private var starting = false
     private var closing: Task<Void, Never>?
@@ -65,18 +66,18 @@ final class NativeAudioCapture: AudioCaptureService {
                 let input = engine.inputNode
                 let format = input.outputFormat(forBus: 0)
                 guard format.sampleRate > 0, format.channelCount > 0 else { throw AudioPipelineError.deviceUnavailable }
-                let continuation = pair.continuation
-                input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, when in
-                    guard let mono = PCMReader.mono(buffer) else {
-                        continuation.finish(throwing: AudioPipelineError.invalidFormat); return
-                    }
-                    let timestamp = when.isHostTimeValid ? AVAudioTime.seconds(forHostTime: when.hostTime) : ProcessInfo.processInfo.systemUptime
-                    let frame = AudioFrame(timestamp: timestamp, source: .microphone, sampleRate: buffer.format.sampleRate, samples: mono)
-                    if case .dropped = continuation.yield(frame) { continuation.finish(throwing: AudioPipelineError.overflow) }
+                // AVAudioEngine вызывает tap на своей realtime-очереди. Явный @Sendable
+                // callback не наследует MainActor от NativeAudioCapture и не падает
+                // на runtime-проверке Swift 6 при получении первого PCM-буфера.
+                let sink = MicrophoneAudioOutput(continuation: pair.continuation)
+                let tap: @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void = { buffer, when in
+                    sink.consume(buffer, at: when)
                 }
+                input.installTap(onBus: 0, bufferSize: 1024, format: format, block: tap)
+                microphoneOutput = sink
                 self.engine = engine
-                deviceObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { _ in
-                    continuation.finish(throwing: AudioPipelineError.interrupted)
+                deviceObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { _ in
+                    pair.continuation.finish(throwing: AudioPipelineError.interrupted)
                 }
                 engine.prepare()
                 try engine.start()
@@ -98,6 +99,7 @@ final class NativeAudioCapture: AudioCaptureService {
         let oldContinuation = continuation; continuation = nil
         let oldStream = stream; stream = nil
         let oldOutput = output; output = nil
+        let oldMicrophoneOutput = microphoneOutput; microphoneOutput = nil
         if let deviceObserver { NotificationCenter.default.removeObserver(deviceObserver) }
         deviceObserver = nil
         engine?.inputNode.removeTap(onBus: 0)
@@ -107,11 +109,39 @@ final class NativeAudioCapture: AudioCaptureService {
                 do { try await oldStream.stopCapture() }
                 catch { oldContinuation?.finish(throwing: AudioPipelineError.interrupted) }
             }
-            withExtendedLifetime(oldOutput) { oldContinuation?.finish() }
+            withExtendedLifetime((oldOutput, oldMicrophoneOutput)) { oldContinuation?.finish() }
         }
         closing = task
         await task.value
         closing = nil
+    }
+}
+
+/// Неизолированный получатель tap: AVAudioEngine доставляет PCM не на MainActor.
+private final class MicrophoneAudioOutput: Sendable {
+    private let continuation: AsyncThrowingStream<AudioFrame, Error>.Continuation
+
+    init(continuation: AsyncThrowingStream<AudioFrame, Error>.Continuation) {
+        self.continuation = continuation
+    }
+
+    nonisolated func consume(_ buffer: AVAudioPCMBuffer, at time: AVAudioTime) {
+        guard let mono = PCMReader.mono(buffer) else {
+            continuation.finish(throwing: AudioPipelineError.invalidFormat)
+            return
+        }
+        let timestamp = time.isHostTimeValid
+            ? AVAudioTime.seconds(forHostTime: time.hostTime)
+            : ProcessInfo.processInfo.systemUptime
+        let frame = AudioFrame(
+            timestamp: timestamp,
+            source: .microphone,
+            sampleRate: buffer.format.sampleRate,
+            samples: mono
+        )
+        if case .dropped = continuation.yield(frame) {
+            continuation.finish(throwing: AudioPipelineError.overflow)
+        }
     }
 }
 
