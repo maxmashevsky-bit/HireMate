@@ -10,6 +10,52 @@ private final class UnusedSecrets: SecureSecretStore {
 
 final class ConversationFlowTests: XCTestCase {
     @MainActor
+    func testSavedMeetingKeepsBoundedWindowButExportsCompleteHistory() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = GRDBMeetingRepository(directory: directory)
+        let meeting = Meeting(profileID: .technical, title: "Длинная встреча", isEphemeral: false)
+        let chat = Subchat(meetingID: meeting.id, title: "Основной")
+        try await repository.createMeeting(meeting, initialChat: chat)
+        for index in 0..<205 {
+            try await repository.saveMessage(
+                ChatMessage(subchatID: chat.id, role: .user, content: "Сообщение \(index)"),
+                meetingID: meeting.id
+            )
+        }
+
+        let model = ConversationModel(profileID: .technical, repository: repository,
+                                      secrets: UnusedSecrets(), network: NetworkClient())
+        await model.open(meeting)
+        XCTAssertEqual(model.messages.count, 200)
+        XCTAssertEqual(model.hiddenMessageCount, 5)
+
+        let data = try await model.exportCurrent()
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let archive = try decoder.decode(MeetingArchive.self, from: data)
+        XCTAssertEqual(archive.messages.count, 205)
+        XCTAssertEqual(archive.messages.first?.content, "Сообщение 0")
+        XCTAssertEqual(archive.messages.last?.content, "Сообщение 204")
+    }
+
+    @MainActor
+    func testEphemeralMeetingLimitsCachedSubchats() async {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let model = ConversationModel(profileID: .technical, repository: GRDBMeetingRepository(directory: directory),
+                                      secrets: UnusedSecrets(), network: NetworkClient())
+        for index in 1..<8 {
+            model.newChatTitle = "Поддиалог \(index)"
+            await model.createSubchat()
+        }
+        XCTAssertEqual(model.chats.count, 8)
+        model.newChatTitle = "Лишний"
+        await model.createSubchat()
+        XCTAssertEqual(model.chats.count, 8)
+        XCTAssertTrue(model.status.contains("ограничен восемью"))
+    }
+
+    @MainActor
     func testMeasuresFirstTokenAndCompletionWithoutRequestPayload() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -26,6 +72,22 @@ final class ConversationFlowTests: XCTestCase {
         XCTAssertEqual(model.lastLLMRequestSucceeded, true)
         model.clearLatencyMetrics()
         XCTAssertNil(model.lastLLMRequestMilliseconds)
+    }
+
+    @MainActor
+    func testOversizedStreamStopsAndKeepsAcceptedPartialAnswer() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let model = ConversationModel(profileID: .technical, repository: GRDBMeetingRepository(directory: directory),
+                                      secrets: UnusedSecrets(), network: NetworkClient(),
+                                      providerFactory: { _ in OversizedStreamingProvider() })
+        model.draft = "Проверить предел ответа"
+        model.send(configuration: ModelConfiguration())
+        try await waitUntil { !model.isGenerating }
+        XCTAssertEqual(model.answer, "Принятая часть")
+        XCTAssertEqual(model.messages.last?.state, .failed)
+        XCTAssertEqual(model.lastLLMRequestSucceeded, false)
+        XCTAssertTrue(model.status.contains("безопасный размер"))
     }
     @MainActor
     func testDeleteWaitsForPreviouslyCancelledQuestionWrite() async throws {
@@ -286,6 +348,17 @@ private struct TimedStreamingProvider: StreamingLLMProvider {
                 } catch { continuation.finish(throwing: error) }
             }
             continuation.onTermination = { @Sendable _ in task.cancel() }
+        }
+    }
+}
+
+private struct OversizedStreamingProvider: StreamingLLMProvider {
+    func stream(_ request: GenerationRequest) -> AsyncThrowingStream<LLMEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(.started(request.id))
+            continuation.yield(.textDelta("Принятая часть"))
+            continuation.yield(.textDelta(String(repeating: "x", count: 256_001)))
+            continuation.finish()
         }
     }
 }

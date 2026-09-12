@@ -26,6 +26,8 @@ final class ConversationModel {
     private(set) var chats: [Subchat]
     private(set) var activeChatID: UUID
     private(set) var messages: [ChatMessage] = []
+    private(set) var hiddenMessageCount = 0
+    private(set) var clippedMessageCount = 0
     private(set) var streamingText = ""
     private(set) var isGenerating = false
     private(set) var isLoading = false
@@ -49,6 +51,10 @@ final class ConversationModel {
     private(set) var retrievedNotes: [NoteFragment] = []
     private(set) var includedNoteIDs: [String] = []
     private var memory: [UUID: [ChatMessage]] = [:]
+    private var memoryHidden: [UUID: Int] = [:]
+    private var memoryClipped: [UUID: Int] = [:]
+    private var memoryOrder: [UUID] = []
+    private let messageWindow = BoundedMessageWindow()
     private var generation: Task<Void, Never>?
     private var generationStartedAt: ContinuousClock.Instant?
     private struct GenerationWork {
@@ -124,11 +130,15 @@ final class ConversationModel {
             guard let first = chats.first else { throw LocalStoreError.invalidData }
             let history = try await repository.messages(subchatID: first.id, meetingID: selected.id)
             guard navigationID == navigation else { return }
-            activate(selected, chats: chats); messages = history
+            activate(selected, chats: chats); replaceMessages(history)
         } catch { status = "Не удалось открыть встречу. Текущий разговор не изменён." }
     }
     func createSubchat() async {
         guard !isLoading else { return }
+        guard !meeting.isEphemeral || chats.count < 8 else {
+            status = "Разговор без сохранения ограничен восемью поддиалогами. Создайте сохраняемую встречу для продолжения."
+            return
+        }
         cancel()
         let title = String(newChatTitle.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
         guard !title.isEmpty else { status = "Введите название поддиалога."; return }
@@ -140,8 +150,8 @@ final class ConversationModel {
         do {
             if !meeting.isEphemeral { try await repository.saveSubchat(chat) }
             guard meeting.id == meetingID, navigationID == navigation else { return }
-            memory[activeChatID] = messages
-            chats.append(chat); activeChatID = chat.id; messages = []; streamingText = ""
+            cacheActiveChat()
+            chats.append(chat); activeChatID = chat.id; replaceMessages([]); streamingText = ""
             if draft == originalDraft { draft = "" }
             if attachment?.id == originalAttachment { attachment = nil }
             pendingChatID = nil; retrievedNotes = []; includedNoteIDs = []; requestedTranscriptCharacters = 0; includedTranscriptCharacters = 0
@@ -165,7 +175,7 @@ final class ConversationModel {
     }
     private func switchChat(_ id: UUID) async {
         guard chats.contains(where: { $0.id == id && $0.meetingID == meeting.id }), !isLoading else { return }
-        cancel(); memory[activeChatID] = messages
+        cancel(); cacheActiveChat()
         let parent = meeting; let navigation = UUID(); navigationID = navigation; isLoading = true
         defer { if navigationID == navigation { isLoading = false } }
         do {
@@ -174,7 +184,9 @@ final class ConversationModel {
             else if parent.isEphemeral { loaded = [] }
             else { loaded = try await repository.messages(subchatID: id, meetingID: parent.id) }
             guard navigationID == navigation else { return }
-            activeChatID = id; messages = loaded; retrievedNotes = []; includedNoteIDs = []; requestedTranscriptCharacters = 0; includedTranscriptCharacters = 0; attachment = nil; draft = ""; streamingText = ""
+            activeChatID = id
+            replaceMessages(loaded, previouslyOmitted: memoryHidden[id] ?? 0, previouslyClipped: memoryClipped[id] ?? 0)
+            retrievedNotes = []; includedNoteIDs = []; requestedTranscriptCharacters = 0; includedTranscriptCharacters = 0; attachment = nil; draft = ""; streamingText = ""
             clearLatencyMetrics()
         } catch { if navigationID == navigation { status = "Не удалось открыть поддиалог." } }
     }
@@ -213,8 +225,12 @@ final class ConversationModel {
             if !meeting.isEphemeral { try await repository.deleteSubchat(id: deleted, meetingID: parent) }
             guard meeting.id == parent, navigationID == navigation else { return }
             chats.removeAll { $0.id == deleted }; memory.removeValue(forKey: deleted)
+            memoryHidden.removeValue(forKey: deleted); memoryClipped.removeValue(forKey: deleted)
+            memoryOrder.removeAll { $0 == deleted }
             failedMessageWrites = failedMessageWrites.filter { $0.value.answer.subchatID != deleted }
-            activeChatID = next.id; messages = loaded; draft = ""; attachment = nil
+            activeChatID = next.id
+            replaceMessages(loaded, previouslyOmitted: memoryHidden[next.id] ?? 0, previouslyClipped: memoryClipped[next.id] ?? 0)
+            draft = ""; attachment = nil
             pendingChatID = nil; retrievedNotes = []; includedNoteIDs = []; requestedTranscriptCharacters = 0; includedTranscriptCharacters = 0; streamingText = ""
             clearLatencyMetrics()
             status = "Поддиалог удалён"
@@ -298,7 +314,7 @@ final class ConversationModel {
             actualInputTokens = nil; actualOutputTokens = nil
             clearLatencyMetrics()
             let user = ChatMessage(subchatID: activeChatID, role: .user, content: question + (includedImage == nil ? "" : "\n\n[Приложен просмотренный снимок; изображение не сохраняется в истории.]"), isDemo: configuration.mode == .demo)
-            messages.append(user); if includedImage != nil { attachment = nil }; draft = ""; streamingText = ""; isGenerating = true
+            appendMessage(user); if includedImage != nil { attachment = nil }; draft = ""; streamingText = ""; isGenerating = true
             requestID = prompt.id
             let parent = meeting
             let provider: any StreamingLLMProvider
@@ -327,6 +343,7 @@ final class ConversationModel {
                             if !text.isEmpty, lastFirstTokenMilliseconds == nil {
                                 lastFirstTokenMilliseconds = Self.milliseconds(startedAt.duration(to: .now))
                             }
+                            guard streamingText.count + text.count <= 256_000 else { throw ProviderError.responseTooLarge }
                             streamingText += text
                         case .usage(let input, let output): actualInputTokens = input; actualOutputTokens = output
                         case .completed: completed = true
@@ -366,14 +383,14 @@ final class ConversationModel {
     private func finish(state: MessageState, demo: Bool) {
         if !streamingText.isEmpty {
             let answer = ChatMessage(subchatID: activeChatID, role: .assistant, content: streamingText, state: state, isDemo: demo)
-            messages.append(answer)
+            appendMessage(answer)
             if state == .complete { onCompletedAnswer?(answer.content) }
             if !meeting.isEphemeral {
                 let parent = meeting.id
                 queueMessageWrite(MessageWrite(answer: answer, meetingID: parent))
             }
         }
-        memory[activeChatID] = messages
+        cacheActiveChat()
         streamingText = ""; isGenerating = false; requestID = nil; generation = nil; generationStartedAt = nil
     }
     private func queueMessageWrite(_ write: MessageWrite) {
@@ -412,7 +429,9 @@ final class ConversationModel {
     private func activate(_ next: Meeting, chats: [Subchat]) {
         guard let first = chats.first else { return }
         meeting = next; self.chats = chats; activeChatID = first.id
-        messages = []; memory = [:]; attachment = nil; draft = ""; streamingText = ""; remoteConsent = false
+        messages = []; memory = [:]; memoryHidden = [:]; memoryClipped = [:]; memoryOrder = []
+        hiddenMessageCount = 0; clippedMessageCount = 0
+        attachment = nil; draft = ""; streamingText = ""; remoteConsent = false
         pendingChatID = nil
         retrievedNotes = []; includedNoteIDs = []; requestedTranscriptCharacters = 0
         contextWasTruncated = false; status = next.isEphemeral ? "История только в памяти" : "Встреча сохраняется локально"
@@ -430,13 +449,39 @@ final class ConversationModel {
         let value = components.seconds * 1_000 + components.attoseconds / 1_000_000_000_000_000
         return Int(min(Int64(Int.max), max(0, value)))
     }
+    private func replaceMessages(_ history: [ChatMessage], previouslyOmitted: Int = 0, previouslyClipped: Int = 0) {
+        let result = messageWindow.apply(to: history)
+        messages = result.messages
+        hiddenMessageCount = previouslyOmitted + result.omittedCount
+        clippedMessageCount = previouslyClipped + result.clippedCount
+    }
+    private func appendMessage(_ message: ChatMessage) {
+        replaceMessages(messages + [message], previouslyOmitted: hiddenMessageCount,
+                        previouslyClipped: clippedMessageCount)
+    }
+    private func cacheActiveChat() {
+        memory[activeChatID] = messages
+        memoryHidden[activeChatID] = hiddenMessageCount
+        memoryClipped[activeChatID] = clippedMessageCount
+        memoryOrder.removeAll { $0 == activeChatID }
+        memoryOrder.append(activeChatID)
+        while memoryOrder.count > 8 {
+            let expired = memoryOrder.removeFirst()
+            memory.removeValue(forKey: expired)
+            memoryHidden.removeValue(forKey: expired)
+            memoryClipped.removeValue(forKey: expired)
+        }
+    }
     func exportCurrent(markdown: Bool = false) async throws -> Data {
         // Текущие сообщения берутся из памяти: экспорт не теряет ответ при сбое записи на диск.
         let snapshotMeeting = meeting; let snapshotChats = chats
         var history = memory; history[activeChatID] = messages
         if !snapshotMeeting.isEphemeral {
-            for chat in snapshotChats where history[chat.id] == nil {
-                history[chat.id] = try await repository.messages(subchatID: chat.id, meetingID: snapshotMeeting.id)
+            for chat in snapshotChats {
+                var stored = try await repository.messages(subchatID: chat.id, meetingID: snapshotMeeting.id)
+                let storedIDs = Set(stored.map(\.id))
+                stored.append(contentsOf: (history[chat.id] ?? []).filter { !storedIDs.contains($0.id) })
+                history[chat.id] = stored.sorted { $0.createdAt < $1.createdAt }
             }
         }
         let archive = MeetingArchive(meeting: snapshotMeeting, subchats: snapshotChats, messages: snapshotChats.flatMap { history[$0.id] ?? [] })

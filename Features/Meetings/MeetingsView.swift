@@ -67,6 +67,12 @@ struct MeetingsView: View {
                 }
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 14) {
+                        if conversation.hiddenMessageCount > 0 || conversation.clippedMessageCount > 0 {
+                            Label("Окно ограничено: скрыто \(conversation.hiddenMessageCount), сокращено \(conversation.clippedMessageCount). " +
+                                  (conversation.meeting.isEphemeral ? "Экспорт разговора в памяти содержит видимую часть." : "Полная история остаётся в SQLite и входит в экспорт."),
+                                  systemImage: "tray.full")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         ForEach(conversation.messages) { message in
                             VStack(alignment: .leading, spacing: 6) {
                                 HStack {

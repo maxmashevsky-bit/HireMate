@@ -2,6 +2,20 @@ import XCTest
 import CopilotCore
 
 final class CoreTests: XCTestCase {
+    func testMessageWindowKeepsNewestMessagesAndBoundsCharacters() {
+        let chat = UUID()
+        let history = (0..<8).map { ChatMessage(subchatID: chat, role: .user, content: String(repeating: "x", count: 300) + "-\($0)") }
+        let result = BoundedMessageWindow(maximumMessages: 4, maximumCharacters: 1_024).apply(to: history)
+        XCTAssertEqual(result.messages.count, 3)
+        XCTAssertEqual(result.omittedCount, 5)
+        XCTAssertEqual(result.messages.map { String($0.content.suffix(2)) }, ["-5", "-6", "-7"])
+        XCTAssertLessThanOrEqual(result.messages.reduce(0) { $0 + $1.content.count }, 1_024)
+
+        let oversized = ChatMessage(subchatID: chat, role: .assistant, content: String(repeating: "я", count: 2_000))
+        let clipped = BoundedMessageWindow(maximumMessages: 4, maximumCharacters: 1_024).apply(to: [oversized])
+        XCTAssertEqual(clipped.clippedCount, 1)
+        XCTAssertLessThanOrEqual(clipped.messages[0].content.count, 1_024)
+    }
     @MainActor
     func testLocalDatabaseBenchmarkUsesNearestRankP95AndMeetsPersonalBudget() async throws {
         let summary = LatencySummary(samplesMilliseconds: [10, 1, 3, 2, 100, 4, 5, 6, 7, 8,

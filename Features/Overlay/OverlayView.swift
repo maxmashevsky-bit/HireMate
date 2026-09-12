@@ -109,6 +109,11 @@ struct OverlayView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 16) {
+                        if model.conversation.hiddenMessageCount > 0 || model.conversation.clippedMessageCount > 0 {
+                            Label("Скрыто: \(model.conversation.hiddenMessageCount), сокращено: \(model.conversation.clippedMessageCount)",
+                                  systemImage: "tray.full")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         if model.conversation.messages.isEmpty && !busy {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("Разговор готов").font(.title3.bold())
