@@ -55,6 +55,14 @@ struct HotkeyOverride: Equatable {
     let usesShift: Bool
 }
 
+protocol SecureInputChecking {
+    func isSecureInputEnabled() -> Bool
+}
+
+struct CarbonSecureInputChecker: SecureInputChecking {
+    func isSecureInputEnabled() -> Bool { IsSecureEventInputEnabled() }
+}
+
 @MainActor @Observable
 final class GlobalHotkeyService {
     enum Action: UInt32, CaseIterable {
@@ -131,11 +139,18 @@ final class GlobalHotkeyService {
     }
 
     private static weak var active: GlobalHotkeyService?
+    private let secureInputChecker: any SecureInputChecking
     private var handler: EventHandlerRef?
     private var registrations: [EventHotKeyRef] = []
     private var actionHandler: ((Action) -> Void)?
     private(set) var issues: [String] = []
     private(set) var registeredCount = 0
+    private(set) var lastTriggeredAction: Action?
+    private(set) var lastTriggeredAt: Date?
+
+    init(secureInputChecker: any SecureInputChecking = CarbonSecureInputChecker()) {
+        self.secureInputChecker = secureInputChecker
+    }
 
     func configure(enabled: Bool, preset: ShortcutPreset, overrides: [String: String],
                    onAction: @escaping (Action) -> Void) {
@@ -154,11 +169,10 @@ final class GlobalHotkeyService {
             guard result == noErr, identifier.signature == 0x4D49434F else { return OSStatus(eventNotHandledErr) }
             // Application event target обрабатывается главным event loop AppKit.
             return MainActor.assumeIsolated {
-                guard !IsSecureEventInputEnabled(),
-                      let action = Action(rawValue: identifier.id),
-                      let service = GlobalHotkeyService.active else { return OSStatus(eventNotHandledErr) }
-                service.actionHandler?(action)
-                return noErr
+                guard let action = Action(rawValue: identifier.id),
+                      let service = GlobalHotkeyService.active,
+                      service.dispatch(action) else { return OSStatus(eventNotHandledErr) }
+                return OSStatus(noErr)
             }
         }, 1, &eventType, nil, &handler)
         guard status == noErr else {
@@ -185,6 +199,20 @@ final class GlobalHotkeyService {
             }
         }
         registeredCount = registrations.count
+    }
+
+    @discardableResult
+    func dispatch(_ action: Action) -> Bool {
+        guard !secureInputChecker.isSecureInputEnabled() else { return false }
+        lastTriggeredAction = action
+        lastTriggeredAt = Date()
+        actionHandler?(action)
+        return true
+    }
+
+    func clearLastTrigger() {
+        lastTriggeredAction = nil
+        lastTriggeredAt = nil
     }
 
     static func encodeOverride(_ value: HotkeyOverride) -> String {

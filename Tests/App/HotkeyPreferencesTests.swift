@@ -1,5 +1,10 @@
 import XCTest
 
+private struct FixedSecureInputChecker: SecureInputChecking {
+    let enabled: Bool
+    func isSecureInputEnabled() -> Bool { enabled }
+}
+
 final class HotkeyPreferencesTests: XCTestCase {
     @MainActor
     func testIndividualOverridePersistsAndCanBeReset() throws {
@@ -49,5 +54,21 @@ final class HotkeyPreferencesTests: XCTestCase {
             invalid, to: NSRect(x: 0, y: 0, width: 1_440, height: 900),
             minimumSize: NSSize(width: 640, height: 500)
         ))
+    }
+
+    @MainActor
+    func testSecureInputBlocksHotkeyDispatchAndDiagnosticsMark() {
+        let blocked = GlobalHotkeyService(secureInputChecker: FixedSecureInputChecker(enabled: true))
+        XCTAssertFalse(blocked.dispatch(.toggle))
+        XCTAssertNil(blocked.lastTriggeredAction)
+        XCTAssertNil(blocked.lastTriggeredAt)
+
+        let allowed = GlobalHotkeyService(secureInputChecker: FixedSecureInputChecker(enabled: false))
+        XCTAssertTrue(allowed.dispatch(.toggle))
+        XCTAssertEqual(allowed.lastTriggeredAction, .toggle)
+        XCTAssertNotNil(allowed.lastTriggeredAt)
+        allowed.clearLastTrigger()
+        XCTAssertNil(allowed.lastTriggeredAction)
+        XCTAssertNil(allowed.lastTriggeredAt)
     }
 }

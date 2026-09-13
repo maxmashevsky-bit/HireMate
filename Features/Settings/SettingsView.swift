@@ -74,6 +74,14 @@ struct DiagnosticsView: View {
                 LabeledContent("Непрозрачность", value: "\(Int(model.overlay.preferences.opacity * 100))%")
                 LabeledContent("Глобальные сочетания", value: model.overlay.preferences.shortcutsEnabled
                                ? "\(model.overlay.hotkeys.registeredCount) зарегистрировано" : "Выключены")
+                LabeledContent("Последняя глобальная команда",
+                               value: model.overlay.hotkeys.lastTriggeredAction?.title ?? "Не получена")
+                if let time = model.overlay.hotkeys.lastTriggeredAt {
+                    LabeledContent("Время команды", value: time.formatted(date: .omitted, time: .standard))
+                    Button("Очистить отметку команды") { model.overlay.hotkeys.clearLastTrigger() }
+                }
+                Text("Для ручной проверки оставьте этот экран открытым, перейдите в другое приложение и нажмите сочетание. Сохраняются только название команды и время в памяти; введённые символы не записываются.")
+                    .font(.caption).foregroundStyle(.secondary)
                 if !model.overlay.hotkeys.issues.isEmpty {
                     ForEach(model.overlay.hotkeys.issues, id: \.self) { issue in
                         Text(issue).font(.caption).foregroundStyle(.orange)
