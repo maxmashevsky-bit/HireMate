@@ -19,6 +19,8 @@ struct OverlaySettingsView: View {
             }
             Text("\(controller.preferences.shortcutPreset.symbols)B — показать/скрыть; W — пропускать клики; D — ввод; G — стоп; [ / ] — прозрачность. Стрелки — перемещение; Shift + стрелки — размер. Цифры 1–5 — быстрые действия.")
                 .font(.caption).foregroundStyle(.secondary)
+            Text("H / ⇧H — снимок дисплея / области; N — заметки; Return / ⇧Return — отправить со снимком / без него; ⇧K/L — поддиалоги; P / ⇧P — новый / список; ⇧X — сброс; R — звук; ⇧A — вопросы по паузам. Для прокрутки к набору добавляется третья клавиша-модификатор.")
+                .font(.caption).foregroundStyle(.secondary)
             Text("Control + Option может конфликтовать с VoiceOver. Можно отключить горячие клавиши и использовать меню приложения.")
                 .font(.caption).foregroundStyle(.secondary)
             if !controller.hotkeys.issues.isEmpty {

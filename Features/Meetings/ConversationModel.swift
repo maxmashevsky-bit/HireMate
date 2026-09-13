@@ -163,6 +163,19 @@ final class ConversationModel {
             if navigationID == navigation { status = "Поддиалог не сохранён. Текущий разговор и черновик сохранены." }
         }
     }
+    func createDefaultSubchat() async {
+        guard draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, attachment == nil else {
+            status = "Черновик или снимок не очищен. Создайте поддиалог кнопкой «+», чтобы подтвердить переход."
+            return
+        }
+        newChatTitle = "Поддиалог \(chats.count + 1)"
+        await createSubchat()
+    }
+    func switchRelative(by offset: Int) {
+        guard !chats.isEmpty, let current = chats.firstIndex(where: { $0.id == activeChatID }) else { return }
+        let target = (current + offset % chats.count + chats.count) % chats.count
+        requestSwitch(chats[target].id)
+    }
     func requestSwitch(_ chatID: UUID) {
         guard !isLoading, chatID != activeChatID, chats.contains(where: { $0.id == chatID }) else { return }
         if attachment != nil || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { pendingChatID = chatID }
@@ -261,10 +274,15 @@ final class ConversationModel {
         if let index = profiles.firstIndex(where: { $0.id == next.id }) { profiles[index] = next }
     }
 
-    func send(configuration: ModelConfiguration, action: QuickAction? = nil, transcriptContext: String = "") {
+    func send(configuration: ModelConfiguration, action: QuickAction? = nil, transcriptContext: String = "",
+              includeAttachedImage: Bool = true) {
         guard !isGenerating, !isLoading else { return }
         retrievedNotes = []; includedNoteIDs = []; requestedTranscriptCharacters = 0; includedTranscriptCharacters = 0
-        guard profile.usesNotes, let noteSearch else { sendPrepared(configuration: configuration, action: action, notes: [], transcriptContext: transcriptContext); return }
+        guard profile.usesNotes, let noteSearch else {
+            sendPrepared(configuration: configuration, action: action, notes: [], transcriptContext: transcriptContext,
+                         includeAttachedImage: includeAttachedImage)
+            return
+        }
         let profile = profile; let query = draft; let imageID = attachment?.id; let navigation = navigationID
         let id = UUID(); retrievalID = id; isLoading = true; status = "Поиск разрешённых заметок на Mac…"
         retrieval = Task { [weak self] in
@@ -277,11 +295,13 @@ final class ConversationModel {
                     if retrievalID == id { status = "Вопрос изменился. Запустите отправку заново." }; return
                 }
                 isLoading = false; retrievedNotes = notes
-                sendPrepared(configuration: configuration, action: action, notes: notes, transcriptContext: transcriptContext)
+                sendPrepared(configuration: configuration, action: action, notes: notes, transcriptContext: transcriptContext,
+                             includeAttachedImage: includeAttachedImage)
             } catch { if retrievalID == id { status = "Поиск заметок не завершён. Запрос в AI не отправлен." } }
         }
     }
-    private func sendPrepared(configuration: ModelConfiguration, action: QuickAction?, notes: [NoteFragment], transcriptContext: String) {
+    private func sendPrepared(configuration: ModelConfiguration, action: QuickAction?, notes: [NoteFragment],
+                              transcriptContext: String, includeAttachedImage: Bool) {
         guard !isGenerating, !isLoading else { return }
         if let action {
             guard action.isValid, action.profileID == meeting.profileID else { status = "Действие относится к другому профилю."; return }
@@ -289,7 +309,7 @@ final class ConversationModel {
         } else { guard InputValidation.canSend(draft) else { return } }
         guard configuration.mode == .demo || remoteConsent else { status = "Подтвердите отправку текста и активного контекста выбранному API."; return }
         do {
-            let includedImage = (action == nil || action?.includeScreenshot == true) ? attachment : nil
+            let includedImage = includeAttachedImage && (action == nil || action?.includeScreenshot == true) ? attachment : nil
             if action?.includeScreenshot == true && includedImage == nil {
                 status = "Сначала сделайте, просмотрите и приложите снимок в разделе «Снимок экрана»."; return
             }
@@ -379,6 +399,13 @@ final class ConversationModel {
         }
         finish(state: .cancelled, demo: messages.last?.isDemo ?? true)
         status = "Ответ остановлен. Полученный текст сохранён в текущем поддиалоге."
+    }
+    func resetToEphemeralConversation() {
+        cancel()
+        navigationID = UUID(); isLoading = false
+        let next = Meeting(profileID: meeting.profileID, title: "Разговор без сохранения", isEphemeral: true)
+        activate(next, chats: [Subchat(meetingID: next.id, title: "Основной")])
+        status = "Текущий контекст сброшен. Сохранённые встречи не удалены."
     }
     private func finish(state: MessageState, demo: Bool) {
         if !streamingText.isEmpty {

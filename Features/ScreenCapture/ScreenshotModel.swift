@@ -33,6 +33,36 @@ final class ScreenshotModel {
     }
     func capture() {
         guard let source = sources.first(where: { $0.id == selectedSourceID }) else { status = "Выберите источник."; return }
+        capture(source, forRegion: false)
+    }
+    func capturePrimaryDisplay(forRegion: Bool) {
+        cancelOperation(); attachment = nil; reviewed = false; selection = nil; isBusy = true
+        let id = operationID
+        operation = Task { [weak self] in
+            guard let self else { return }
+            defer { if operationID == id { isBusy = false; operation = nil } }
+            do {
+                let available = try await service.sources(); try Task.checkCancellation()
+                let display = available.first { source in
+                    if case .display = source.kind { return true }
+                    return false
+                }
+                guard operationID == id, let source = display ?? available.first else {
+                    throw ScreenCaptureError.missingSource
+                }
+                sources = available; selectedSourceID = source.id
+                let image = try await service.capture(source); try Task.checkCancellation()
+                guard operationID == id else { return }
+                attachment = try ImagePreparation.encode(image, format: format)
+                status = forRegion
+                    ? "Снимок готов. Выделите область и примените обрезку, затем подтвердите просмотр."
+                    : "Снимок готов. Просмотрите его и подтвердите перед приложением."
+            } catch {
+                if operationID == id { status = (error as? LocalizedError)?.errorDescription ?? "Снимок не получен." }
+            }
+        }
+    }
+    private func capture(_ source: CaptureSource, forRegion: Bool) {
         cancelOperation(); attachment = nil; reviewed = false; selection = nil; isBusy = true
         let id = operationID; let encoding = format
         operation = Task { [weak self] in
@@ -42,7 +72,9 @@ final class ScreenshotModel {
                 let image = try await service.capture(source); try Task.checkCancellation()
                 guard operationID == id else { return }
                 attachment = try ImagePreparation.encode(image, format: encoding)
-                status = "Просмотрите снимок. Можно выделить область для обрезки или закрашивания."
+                status = forRegion
+                    ? "Выделите область для обрезки и подтвердите просмотр."
+                    : "Просмотрите снимок. Можно выделить область для обрезки или закрашивания."
             } catch { if operationID == id { status = (error as? LocalizedError)?.errorDescription ?? "Снимок не получен." } }
         }
     }

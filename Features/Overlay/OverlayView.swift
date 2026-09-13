@@ -27,8 +27,10 @@ struct OverlayView: View {
                     .font(.caption).padding(8).frame(maxWidth: .infinity).background(.yellow.opacity(0.15))
             }
             HStack(spacing: 0) {
-                chatRail
-                Divider()
+                if controller.isChatRailVisible {
+                    chatRail
+                    Divider()
+                }
                 VStack(spacing: 0) {
                     history
                     composer
@@ -148,6 +150,7 @@ struct OverlayView: View {
                             }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
                                 .background(message.role == .user ? DesignTokens.accent.opacity(0.10) : DesignTokens.card.opacity(0.55),
                                             in: RoundedRectangle(cornerRadius: 12))
+                                .id(message.id)
                         }
                         if busy {
                             HStack(alignment: .top) {
@@ -159,6 +162,13 @@ struct OverlayView: View {
                     }.padding(.horizontal, 16).padding(.bottom, 12)
                 }
                 .onChange(of: model.conversation.messages.count) { _, _ in proxy.scrollTo("latest", anchor: .bottom) }
+                .onChange(of: controller.historyScrollRequest) { _, _ in
+                    if controller.historyScrollDirection < 0, let first = model.conversation.messages.first {
+                        proxy.scrollTo(first.id, anchor: .top)
+                    } else {
+                        proxy.scrollTo("latest", anchor: .bottom)
+                    }
+                }
             }
         }
     }

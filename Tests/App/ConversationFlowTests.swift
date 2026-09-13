@@ -332,6 +332,58 @@ final class ConversationFlowTests: XCTestCase {
         XCTAssertEqual(model.messages.last?.isDemo, true)
         XCTAssertTrue(model.answer.contains("подтверждённые факты"))
     }
+
+    @MainActor
+    func testSendWithoutScreenshotKeepsReviewedAttachmentForLater() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let model = ConversationModel(profileID: .technical, repository: GRDBMeetingRepository(directory: directory),
+                                      secrets: UnusedSecrets(), network: NetworkClient())
+        let image = try ImageAttachment(data: Data([1]), mimeType: "image/png", width: 1, height: 1)
+        XCTAssertTrue(model.attach(image))
+        model.draft = "Ответ без изображения"
+        model.send(configuration: ModelConfiguration(), includeAttachedImage: false)
+        try await waitUntil { !model.isGenerating }
+
+        XCTAssertEqual(model.attachment?.id, image.id)
+        XCTAssertFalse(model.messages.first?.content.contains("Приложен просмотренный снимок") ?? true)
+    }
+
+    @MainActor
+    func testShortcutStyleSubchatNavigationDoesNotDiscardDraft() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let model = ConversationModel(profileID: .technical, repository: GRDBMeetingRepository(directory: directory),
+                                      secrets: UnusedSecrets(), network: NetworkClient())
+        let first = model.activeChatID
+        await model.createDefaultSubchat()
+        XCTAssertEqual(model.chats.count, 2)
+        model.draft = "Не потерять"
+        model.switchRelative(by: -1)
+
+        XCTAssertEqual(model.pendingChatID, first)
+        XCTAssertEqual(model.draft, "Не потерять")
+    }
+
+    @MainActor
+    func testResetContextKeepsSavedMeetingInLibrary() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let model = ConversationModel(profileID: .hr, repository: GRDBMeetingRepository(directory: directory),
+                                      secrets: UnusedSecrets(), network: NetworkClient())
+        model.saveNewMeetingHistory = true
+        model.newMeetingTitle = "Сохранённая встреча"
+        await model.createMeeting()
+        let savedID = model.meeting.id
+        model.draft = "Временный черновик"
+
+        model.resetToEphemeralConversation()
+
+        XCTAssertTrue(model.meeting.isEphemeral)
+        XCTAssertTrue(model.draft.isEmpty)
+        XCTAssertTrue(model.messages.isEmpty)
+        XCTAssertTrue(model.savedMeetings.contains(where: { $0.id == savedID }))
+    }
 }
 
 private struct TimedStreamingProvider: StreamingLLMProvider {

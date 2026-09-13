@@ -91,12 +91,42 @@ final class AppModel {
     }
     func requestScreen() { permissions.requestScreen(); refreshPermissions() }
     func finishOnboarding() { preferences.onboardingCompleted = true; showOnboarding = false }
-    func send() {
+    func send(includeScreenshot: Bool = true) {
         speech.stop()
         conversation.send(configuration: providerSettings.configuration,
-                          transcriptContext: transcription.contextForRequest())
+                          transcriptContext: transcription.contextForRequest(),
+                          includeAttachedImage: includeScreenshot)
     }
     func stop() { conversation.cancel(); speech.stop() }
+    func resetCurrentContext() {
+        conversation.resetToEphemeralConversation()
+        transcription.reset()
+        screenshot.clear()
+        speech.stop()
+        pendingQuickAction = nil
+        Task { await audio.stop(reason: "Контекст сброшен. Захват остановлен."); await audio.clear() }
+    }
+    func toggleAudioFromShortcut() {
+        guard !audio.isStarting, !audio.isStopping, !audio.isClearing else { return }
+        if audio.isRunning {
+            Task { await audio.stop() }
+        } else if audio.consent {
+            audio.start()
+        } else {
+            requestedSection = .audio
+            notice = "Перед первым запуском звука подтвердите локальный захват в разделе «Звук»."
+        }
+    }
+    func toggleAutomaticQuestionsFromShortcut() {
+        guard !audio.isRunning, !audio.isStarting, !audio.isStopping else {
+            notice = "Остановите захват звука перед сменой режима вопросов."
+            return
+        }
+        audio.questionMode = audio.questionMode == .automatic ? .manual : .automatic
+        notice = audio.questionMode == .automatic
+            ? "Режим вопросов по паузам включён."
+            : "Ручной режим вопросов включён."
+    }
     func requestQuickAction(slot: Int) {
         guard let action = quickActions.actions.first(where: { $0.slot == slot }) else { return }
         guard action.profileID == profile else { notice = "Для действия «\(action.name)» выберите профиль «\(action.profileID.title)»."; return }

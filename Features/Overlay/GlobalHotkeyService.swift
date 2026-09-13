@@ -7,6 +7,10 @@ final class GlobalHotkeyService {
         case toggle = 1, clickThrough, focus, cancel, dim, brighten
         case left, right, up, down, narrower, wider, shorter, taller
         case quick1, quick2, quick3, quick4, quick5
+        case screenshot, regionScreenshot, notes
+        case sendWithScreenshot, sendWithoutScreenshot
+        case previousChat, nextChat, newChat, toggleChatList, resetContext
+        case toggleAudio, toggleAutomaticQuestions, scrollUp, scrollDown
         var keyCode: UInt32 {
             switch self {
             case .quick1: UInt32(kVK_ANSI_1)
@@ -24,9 +28,24 @@ final class GlobalHotkeyService {
             case .right, .wider: UInt32(kVK_RightArrow)
             case .up, .taller: UInt32(kVK_UpArrow)
             case .down, .shorter: UInt32(kVK_DownArrow)
+            case .screenshot, .regionScreenshot: UInt32(kVK_ANSI_H)
+            case .notes: UInt32(kVK_ANSI_N)
+            case .sendWithScreenshot, .sendWithoutScreenshot: UInt32(kVK_Return)
+            case .previousChat: UInt32(kVK_ANSI_K)
+            case .nextChat: UInt32(kVK_ANSI_L)
+            case .newChat, .toggleChatList: UInt32(kVK_ANSI_P)
+            case .resetContext: UInt32(kVK_ANSI_X)
+            case .toggleAudio: UInt32(kVK_ANSI_R)
+            case .toggleAutomaticQuestions: UInt32(kVK_ANSI_A)
+            case .scrollUp: UInt32(kVK_UpArrow)
+            case .scrollDown: UInt32(kVK_DownArrow)
             }
         }
-        var needsShift: Bool { [.narrower, .wider, .shorter, .taller].contains(self) }
+        var needsShift: Bool {
+            [.narrower, .wider, .shorter, .taller, .regionScreenshot, .sendWithoutScreenshot,
+             .previousChat, .nextChat, .toggleChatList, .resetContext, .toggleAutomaticQuestions].contains(self)
+        }
+        var needsAlternateBase: Bool { [.scrollUp, .scrollDown].contains(self) }
         var title: String {
             switch self {
             case .quick1, .quick2, .quick3, .quick4, .quick5: "Быстрое действие"
@@ -38,6 +57,19 @@ final class GlobalHotkeyService {
             case .brighten: "Больше непрозрачность"
             case .left, .right, .up, .down: "Перемещение окна"
             case .narrower, .wider, .shorter, .taller: "Изменение размера"
+            case .screenshot: "Снимок экрана"
+            case .regionScreenshot: "Снимок области"
+            case .notes: "Заметки"
+            case .sendWithScreenshot: "Отправить со снимком"
+            case .sendWithoutScreenshot: "Отправить без снимка"
+            case .previousChat: "Предыдущий поддиалог"
+            case .nextChat: "Следующий поддиалог"
+            case .newChat: "Новый поддиалог"
+            case .toggleChatList: "Список поддиалогов"
+            case .resetContext: "Сбросить текущий контекст"
+            case .toggleAudio: "Захват звука"
+            case .toggleAutomaticQuestions: "Автоматические вопросы"
+            case .scrollUp, .scrollDown: "Прокрутка ответа"
             }
         }
     }
@@ -81,6 +113,9 @@ final class GlobalHotkeyService {
             var reference: EventHotKeyRef?
             var modifiers = preset == .commandOption ? UInt32(cmdKey | optionKey) : UInt32(controlKey | optionKey)
             if action.needsShift { modifiers |= UInt32(shiftKey) }
+            if action.needsAlternateBase {
+                modifiers |= preset == .commandOption ? UInt32(controlKey) : UInt32(cmdKey)
+            }
             let identifier = EventHotKeyID(signature: 0x4D49434F, id: action.rawValue)
             let result = RegisterEventHotKey(action.keyCode, modifiers, identifier,
                                              GetApplicationEventTarget(), 0, &reference)

@@ -95,6 +95,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private(set) var isVisible = false
     private(set) var isClickThrough = false
     private(set) var focusRequest = 0
+    private(set) var historyScrollRequest = 0
+    private(set) var historyScrollDirection = 1
+    private(set) var isChatRailVisible = true
     private(set) var compatibilityResult: OverlayCaptureCompatibility = .notTested
     private(set) var isCompatibilityMarkerVisible = false
 
@@ -263,7 +266,36 @@ final class OverlayController: NSObject, NSWindowDelegate {
         case .wider: resizeBy(dx: 24, dy: 0)
         case .shorter: resizeBy(dx: 0, dy: -24)
         case .taller: resizeBy(dx: 0, dy: 24)
+        case .screenshot:
+            openMain(.screenshot)
+            model?.screenshot.capturePrimaryDisplay(forRegion: false)
+        case .regionScreenshot:
+            openMain(.screenshot)
+            model?.screenshot.capturePrimaryDisplay(forRegion: true)
+        case .notes: openMain(.notes)
+        case .sendWithScreenshot:
+            guard model?.conversation.attachment != nil else {
+                model?.notice = "Сначала приложите просмотренный снимок экрана."
+                openMain(.screenshot)
+                return
+            }
+            model?.send(includeScreenshot: true)
+        case .sendWithoutScreenshot: model?.send(includeScreenshot: false)
+        case .previousChat: model?.conversation.switchRelative(by: -1)
+        case .nextChat: model?.conversation.switchRelative(by: 1)
+        case .newChat: Task { await model?.conversation.createDefaultSubchat() }
+        case .toggleChatList: isChatRailVisible.toggle()
+        case .resetContext: model?.resetCurrentContext()
+        case .toggleAudio: model?.toggleAudioFromShortcut()
+        case .toggleAutomaticQuestions: model?.toggleAutomaticQuestionsFromShortcut()
+        case .scrollUp: requestHistoryScroll(direction: -1)
+        case .scrollDown: requestHistoryScroll(direction: 1)
         }
+    }
+
+    private func requestHistoryScroll(direction: Int) {
+        historyScrollDirection = direction
+        historyScrollRequest += 1
     }
 
     private func moveBy(dx: CGFloat, dy: CGFloat) {
