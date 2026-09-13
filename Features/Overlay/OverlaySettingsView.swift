@@ -3,6 +3,7 @@ import SwiftUI
 @MainActor
 struct OverlaySettingsView: View {
     @Bindable var controller: OverlayController
+    @State private var selectedAction: GlobalHotkeyService.Action = .toggle
     var body: some View {
         @Bindable var preferences = controller.preferences
         Section("Окно подсказок") {
@@ -21,6 +22,35 @@ struct OverlaySettingsView: View {
                 .font(.caption).foregroundStyle(.secondary)
             Text("H / ⇧H — снимок дисплея / области; N — заметки; Return / ⇧Return — отправить со снимком / без него; ⇧K/L — поддиалоги; P / ⇧P — новый / список; ⇧X — сброс; R — звук; ⇧A — вопросы по паузам. Для прокрутки к набору добавляется третья клавиша-модификатор.")
                 .font(.caption).foregroundStyle(.secondary)
+            DisclosureGroup("Переназначить команду") {
+                Picker("Команда", selection: $selectedAction) {
+                    ForEach(GlobalHotkeyService.Action.allCases, id: \.rawValue) { action in
+                        Text(action.title).tag(action)
+                    }
+                }
+                Picker("Клавиша", selection: Binding(
+                    get: { effectiveOverride.key },
+                    set: { saveOverride(key: $0, usesShift: effectiveOverride.usesShift) }
+                )) {
+                    ForEach(HotkeyKey.allCases) { key in Text(key.title).tag(key) }
+                }
+                Toggle("Добавить Shift", isOn: Binding(
+                    get: { effectiveOverride.usesShift },
+                    set: { saveOverride(key: effectiveOverride.key, usesShift: $0) }
+                ))
+                HStack {
+                    Text("Текущее сочетание: \(effectiveShortcut)")
+                    Spacer()
+                    Button("По умолчанию") {
+                        controller.preferences.setHotkeyOverride(nil, for: selectedAction)
+                        controller.configureHotkeys()
+                    }
+                    .disabled(controller.preferences.hotkeyOverride(for: selectedAction) == nil)
+                }
+                .font(.caption)
+                Text("Если сочетание совпадёт с другой командой или занято системой, оно появится ниже как незарегистрированное.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Text("Control + Option может конфликтовать с VoiceOver. Можно отключить горячие клавиши и использовать меню приложения.")
                 .font(.caption).foregroundStyle(.secondary)
             if !controller.hotkeys.issues.isEmpty {
@@ -32,5 +62,22 @@ struct OverlaySettingsView: View {
         .onChange(of: controller.preferences.opacity) { _, _ in controller.applyOpacity() }
         .onChange(of: controller.preferences.shortcutsEnabled) { _, _ in controller.configureHotkeys() }
         .onChange(of: controller.preferences.shortcutPreset) { _, _ in controller.configureHotkeys() }
+    }
+
+    private var effectiveOverride: HotkeyOverride {
+        controller.preferences.hotkeyOverride(for: selectedAction)
+            ?? HotkeyOverride(key: selectedAction.defaultKey, usesShift: selectedAction.needsShift)
+    }
+
+    private var effectiveShortcut: String {
+        let alternate = selectedAction.needsAlternateBase
+            ? (controller.preferences.shortcutPreset == .commandOption ? "⌃" : "⌘") : ""
+        return controller.preferences.shortcutPreset.symbols + alternate
+            + (effectiveOverride.usesShift ? "⇧" : "") + effectiveOverride.key.title
+    }
+
+    private func saveOverride(key: HotkeyKey, usesShift: Bool) {
+        controller.preferences.setHotkeyOverride(HotkeyOverride(key: key, usesShift: usesShift), for: selectedAction)
+        controller.configureHotkeys()
     }
 }

@@ -1,6 +1,60 @@
 import Carbon
 import Observation
 
+enum HotkeyKey: String, CaseIterable, Identifiable {
+    case b, w, d, g, h, n, k, l, p, x, r, a
+    case one, two, three, four, five
+    case leftBracket, rightBracket, `return`
+    case left, right, up, down
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .leftBracket: "["
+        case .rightBracket: "]"
+        case .return: "Return"
+        case .left: "←"
+        case .right: "→"
+        case .up: "↑"
+        case .down: "↓"
+        default: rawValue.uppercased()
+        }
+    }
+    var keyCode: UInt32 {
+        switch self {
+        case .b: UInt32(kVK_ANSI_B)
+        case .w: UInt32(kVK_ANSI_W)
+        case .d: UInt32(kVK_ANSI_D)
+        case .g: UInt32(kVK_ANSI_G)
+        case .h: UInt32(kVK_ANSI_H)
+        case .n: UInt32(kVK_ANSI_N)
+        case .k: UInt32(kVK_ANSI_K)
+        case .l: UInt32(kVK_ANSI_L)
+        case .p: UInt32(kVK_ANSI_P)
+        case .x: UInt32(kVK_ANSI_X)
+        case .r: UInt32(kVK_ANSI_R)
+        case .a: UInt32(kVK_ANSI_A)
+        case .one: UInt32(kVK_ANSI_1)
+        case .two: UInt32(kVK_ANSI_2)
+        case .three: UInt32(kVK_ANSI_3)
+        case .four: UInt32(kVK_ANSI_4)
+        case .five: UInt32(kVK_ANSI_5)
+        case .leftBracket: UInt32(kVK_ANSI_LeftBracket)
+        case .rightBracket: UInt32(kVK_ANSI_RightBracket)
+        case .return: UInt32(kVK_Return)
+        case .left: UInt32(kVK_LeftArrow)
+        case .right: UInt32(kVK_RightArrow)
+        case .up: UInt32(kVK_UpArrow)
+        case .down: UInt32(kVK_DownArrow)
+        }
+    }
+}
+
+struct HotkeyOverride: Equatable {
+    let key: HotkeyKey
+    let usesShift: Bool
+}
+
 @MainActor @Observable
 final class GlobalHotkeyService {
     enum Action: UInt32, CaseIterable {
@@ -11,34 +65,32 @@ final class GlobalHotkeyService {
         case sendWithScreenshot, sendWithoutScreenshot
         case previousChat, nextChat, newChat, toggleChatList, resetContext
         case toggleAudio, toggleAutomaticQuestions, scrollUp, scrollDown
-        var keyCode: UInt32 {
+        var defaultKey: HotkeyKey {
             switch self {
-            case .quick1: UInt32(kVK_ANSI_1)
-            case .quick2: UInt32(kVK_ANSI_2)
-            case .quick3: UInt32(kVK_ANSI_3)
-            case .quick4: UInt32(kVK_ANSI_4)
-            case .quick5: UInt32(kVK_ANSI_5)
-            case .toggle: UInt32(kVK_ANSI_B)
-            case .clickThrough: UInt32(kVK_ANSI_W)
-            case .focus: UInt32(kVK_ANSI_D)
-            case .cancel: UInt32(kVK_ANSI_G)
-            case .dim: UInt32(kVK_ANSI_LeftBracket)
-            case .brighten: UInt32(kVK_ANSI_RightBracket)
-            case .left, .narrower: UInt32(kVK_LeftArrow)
-            case .right, .wider: UInt32(kVK_RightArrow)
-            case .up, .taller: UInt32(kVK_UpArrow)
-            case .down, .shorter: UInt32(kVK_DownArrow)
-            case .screenshot, .regionScreenshot: UInt32(kVK_ANSI_H)
-            case .notes: UInt32(kVK_ANSI_N)
-            case .sendWithScreenshot, .sendWithoutScreenshot: UInt32(kVK_Return)
-            case .previousChat: UInt32(kVK_ANSI_K)
-            case .nextChat: UInt32(kVK_ANSI_L)
-            case .newChat, .toggleChatList: UInt32(kVK_ANSI_P)
-            case .resetContext: UInt32(kVK_ANSI_X)
-            case .toggleAudio: UInt32(kVK_ANSI_R)
-            case .toggleAutomaticQuestions: UInt32(kVK_ANSI_A)
-            case .scrollUp: UInt32(kVK_UpArrow)
-            case .scrollDown: UInt32(kVK_DownArrow)
+            case .quick1: .one
+            case .quick2: .two
+            case .quick3: .three
+            case .quick4: .four
+            case .quick5: .five
+            case .toggle: .b
+            case .clickThrough: .w
+            case .focus: .d
+            case .cancel: .g
+            case .dim: .leftBracket
+            case .brighten: .rightBracket
+            case .left, .narrower: .left
+            case .right, .wider: .right
+            case .up, .taller, .scrollUp: .up
+            case .down, .shorter, .scrollDown: .down
+            case .screenshot, .regionScreenshot: .h
+            case .notes: .n
+            case .sendWithScreenshot, .sendWithoutScreenshot: .return
+            case .previousChat: .k
+            case .nextChat: .l
+            case .newChat, .toggleChatList: .p
+            case .resetContext: .x
+            case .toggleAudio: .r
+            case .toggleAutomaticQuestions: .a
             }
         }
         var needsShift: Bool {
@@ -48,7 +100,11 @@ final class GlobalHotkeyService {
         var needsAlternateBase: Bool { [.scrollUp, .scrollDown].contains(self) }
         var title: String {
             switch self {
-            case .quick1, .quick2, .quick3, .quick4, .quick5: "Быстрое действие"
+            case .quick1: "Быстрое действие 1"
+            case .quick2: "Быстрое действие 2"
+            case .quick3: "Быстрое действие 3"
+            case .quick4: "Быстрое действие 4"
+            case .quick5: "Быстрое действие 5"
             case .toggle: "Показать / скрыть"
             case .clickThrough: "Пропускать клики"
             case .focus: "Ввод вопроса"
@@ -81,7 +137,8 @@ final class GlobalHotkeyService {
     private(set) var issues: [String] = []
     private(set) var registeredCount = 0
 
-    func configure(enabled: Bool, preset: ShortcutPreset, onAction: @escaping (Action) -> Void) {
+    func configure(enabled: Bool, preset: ShortcutPreset, overrides: [String: String],
+                   onAction: @escaping (Action) -> Void) {
         stop()
         issues = []
         guard enabled else { return }
@@ -111,13 +168,15 @@ final class GlobalHotkeyService {
         }
         for action in Action.allCases {
             var reference: EventHotKeyRef?
+            let custom = Self.decodeOverride(overrides[String(action.rawValue)])
+            let key = custom?.key ?? action.defaultKey
             var modifiers = preset == .commandOption ? UInt32(cmdKey | optionKey) : UInt32(controlKey | optionKey)
-            if action.needsShift { modifiers |= UInt32(shiftKey) }
+            if custom?.usesShift ?? action.needsShift { modifiers |= UInt32(shiftKey) }
             if action.needsAlternateBase {
                 modifiers |= preset == .commandOption ? UInt32(controlKey) : UInt32(cmdKey)
             }
             let identifier = EventHotKeyID(signature: 0x4D49434F, id: action.rawValue)
-            let result = RegisterEventHotKey(action.keyCode, modifiers, identifier,
+            let result = RegisterEventHotKey(key.keyCode, modifiers, identifier,
                                              GetApplicationEventTarget(), 0, &reference)
             if result == noErr, let reference {
                 registrations.append(reference)
@@ -126,6 +185,16 @@ final class GlobalHotkeyService {
             }
         }
         registeredCount = registrations.count
+    }
+
+    static func encodeOverride(_ value: HotkeyOverride) -> String {
+        "\(value.key.rawValue)|\(value.usesShift ? 1 : 0)"
+    }
+
+    static func decodeOverride(_ value: String?) -> HotkeyOverride? {
+        guard let parts = value?.split(separator: "|", omittingEmptySubsequences: false), parts.count == 2,
+              let key = HotkeyKey(rawValue: String(parts[0])), ["0", "1"].contains(parts[1]) else { return nil }
+        return HotkeyOverride(key: key, usesShift: parts[1] == "1")
     }
 
     func stop() {

@@ -117,7 +117,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     func configureHotkeys() {
-        hotkeys.configure(enabled: preferences.shortcutsEnabled, preset: preferences.shortcutPreset) { [weak self] in
+        hotkeys.configure(enabled: preferences.shortcutsEnabled, preset: preferences.shortcutPreset,
+                          overrides: preferences.hotkeyOverrides) { [weak self] in
             self?.perform($0)
         }
     }

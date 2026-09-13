@@ -15,7 +15,7 @@ for p in app_sources+test_sources:
  s=p.relative_to(root).as_posix();f=obj(s,f'isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "{s}"; sourceTree = SOURCE_ROOT;');file_ids.append(f)
  b=obj('build:'+s,f'isa = PBXBuildFile; fileRef = {f};');(test_build if p in test_sources else app_build).append(b)
 # Проверяем модели приложения с изолированными зависимостями без TCC и устройств.
-for s in ['Features/Audio/AudioSessionModel.swift', 'Features/Audio/NativeAudioCapture.swift', 'Features/Meetings/ConversationModel.swift', 'Features/Notes/NotesModel.swift', 'Features/ScreenCapture/ImagePreparation.swift', 'Features/ScreenCapture/NativeScreenCapture.swift', 'Features/Transcription/TranscriptionModel.swift']:
+for s in ['Features/Audio/AudioSessionModel.swift', 'Features/Audio/NativeAudioCapture.swift', 'Features/Meetings/ConversationModel.swift', 'Features/Notes/NotesModel.swift', 'Features/Overlay/GlobalHotkeyService.swift', 'Features/Overlay/OverlayPreferences.swift', 'Features/ScreenCapture/ImagePreparation.swift', 'Features/ScreenCapture/NativeScreenCapture.swift', 'Features/Transcription/TranscriptionModel.swift']:
  test_build.append(obj('test-support:'+s, f'isa = PBXBuildFile; fileRef = {ref(s)};'))
 app=obj('app', 'isa = PBXFileReference; explicitFileType = wrapper.application; path = MaxInterviewCopilot.app; sourceTree = BUILT_PRODUCTS_DIR;')
 test=obj('test', 'isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = CopilotCoreTests.xctest; sourceTree = BUILT_PRODUCTS_DIR;')

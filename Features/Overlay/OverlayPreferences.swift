@@ -13,6 +13,9 @@ final class OverlayPreferences {
     var shortcutsEnabled: Bool {
         didSet { defaults.set(shortcutsEnabled, forKey: "overlay.shortcutsEnabled") }
     }
+    private(set) var hotkeyOverrides: [String: String] {
+        didSet { defaults.set(hotkeyOverrides, forKey: "overlay.hotkeyOverrides") }
+    }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -20,6 +23,17 @@ final class OverlayPreferences {
         opacity = storedOpacity.isFinite ? min(1, max(0.35, storedOpacity)) : 0.95
         shortcutPreset = ShortcutPreset(rawValue: defaults.string(forKey: "overlay.shortcutPreset") ?? "") ?? .commandOption
         shortcutsEnabled = defaults.object(forKey: "overlay.shortcutsEnabled") as? Bool ?? true
+        hotkeyOverrides = defaults.dictionary(forKey: "overlay.hotkeyOverrides") as? [String: String] ?? [:]
+    }
+
+    func hotkeyOverride(for action: GlobalHotkeyService.Action) -> HotkeyOverride? {
+        GlobalHotkeyService.decodeOverride(hotkeyOverrides[String(action.rawValue)])
+    }
+
+    func setHotkeyOverride(_ value: HotkeyOverride?, for action: GlobalHotkeyService.Action) {
+        let key = String(action.rawValue)
+        if let value { hotkeyOverrides[key] = GlobalHotkeyService.encodeOverride(value) }
+        else { hotkeyOverrides.removeValue(forKey: key) }
     }
 
     func savedFrame(for screen: NSScreen) -> NSRect? {
