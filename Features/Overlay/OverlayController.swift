@@ -1,6 +1,79 @@
 import AppKit
+import ScreenCaptureKit
 import SwiftUI
 import Observation
+
+enum OverlayCaptureCompatibility: Equatable {
+    case notTested
+    case running
+    case excluded
+    case captured
+    case failed(String)
+
+    var title: String {
+        switch self {
+        case .notTested: "Не проверено"
+        case .running: "Проверяем…"
+        case .excluded: "В этом тесте окно не попало в снимок"
+        case .captured: "Окно попало в снимок"
+        case .failed(let message): "Проверка не завершена: \(message)"
+        }
+    }
+}
+
+@MainActor
+protocol OverlayCompatibilityTesting {
+    func containsTestMarker(on displayID: CGDirectDisplayID) async throws -> Bool
+}
+
+@MainActor
+private final class NativeOverlayCompatibilityTester: OverlayCompatibilityTesting {
+    func containsTestMarker(on displayID: CGDirectDisplayID) async throws -> Bool {
+        guard CGPreflightScreenCaptureAccess() else { throw ScreenCaptureError.permission }
+        let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+        guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
+            throw ScreenCaptureError.missingSource
+        }
+        let filter = SCContentFilter(display: display, excludingWindows: [])
+        let configuration = SCStreamConfiguration()
+        configuration.width = display.width
+        configuration.height = display.height
+        configuration.showsCursor = false
+        configuration.capturesAudio = false
+        let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+        try Task.checkCancellation()
+        return Self.containsMarker(in: image)
+    }
+
+    private static func containsMarker(in image: CGImage) -> Bool {
+        let width = image.width
+        let height = image.height
+        guard width > 0, height > 0 else { return false }
+        let bytesPerRow = width * 4
+        var pixels = [UInt8](repeating: 0, count: bytesPerRow * height)
+        guard let context = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return false }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        var magenta = 0
+        var cyan = 0
+        for offset in stride(from: 0, to: pixels.count, by: 8) {
+            let red = pixels[offset]
+            let green = pixels[offset + 1]
+            let blue = pixels[offset + 2]
+            if red > 210, green < 90, blue > 170 { magenta += 1 }
+            if red < 90, green > 210, blue > 170 { cyan += 1 }
+            if magenta >= 200, cyan >= 200 { return true }
+        }
+        return false
+    }
+}
 
 @MainActor
 private final class CopilotPanel: NSPanel {
@@ -12,14 +85,22 @@ private final class CopilotPanel: NSPanel {
 final class OverlayController: NSObject, NSWindowDelegate {
     let preferences = OverlayPreferences()
     let hotkeys = GlobalHotkeyService()
+    private let compatibilityTester: any OverlayCompatibilityTesting
     private weak var model: AppModel?
     var openMainWindow: (() -> Void)?
     private var panel: CopilotPanel?
     private var screenObserver: NSObjectProtocol?
+    private var compatibilityTask: Task<Void, Never>?
     private var isRestoringFrame = false
     private(set) var isVisible = false
     private(set) var isClickThrough = false
     private(set) var focusRequest = 0
+    private(set) var compatibilityResult: OverlayCaptureCompatibility = .notTested
+    private(set) var isCompatibilityMarkerVisible = false
+
+    init(compatibilityTester: (any OverlayCompatibilityTesting)? = nil) {
+        self.compatibilityTester = compatibilityTester ?? NativeOverlayCompatibilityTester()
+    }
 
     func connect(model: AppModel) {
         self.model = model
@@ -53,6 +134,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             window.isReleasedWhenClosed = false
             window.isOpaque = false
             window.backgroundColor = .clear
+            window.sharingType = .none
             window.hasShadow = true
             window.minSize = NSSize(width: 640, height: 500)
             window.delegate = self
@@ -105,6 +187,51 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     func startDragging(_ event: NSEvent) { panel?.performDrag(with: event) }
+
+    func testCaptureCompatibility() {
+        guard compatibilityTask == nil else { return }
+        guard CGPreflightScreenCaptureAccess() else {
+            compatibilityResult = .failed(ScreenCaptureError.permission.localizedDescription)
+            return
+        }
+        let wasVisible = isVisible
+        if !wasVisible { show() }
+        guard let panel, let displayID = panel.screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else {
+            compatibilityResult = .failed("Не удалось определить дисплей рабочего окна.")
+            if !wasVisible { hide() }
+            return
+        }
+        compatibilityResult = .running
+        isCompatibilityMarkerVisible = true
+        panel.sharingType = .readOnly
+        panel.displayIfNeeded()
+        compatibilityTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                panel.sharingType = .none
+                isCompatibilityMarkerVisible = false
+                compatibilityTask = nil
+                if !wasVisible { hide() }
+            }
+            do {
+                try await Task.sleep(for: .milliseconds(250))
+                let controlMarkerFound = try await compatibilityTester.containsTestMarker(on: displayID)
+                guard controlMarkerFound else {
+                    compatibilityResult = .failed("Контрольный снимок не распознал тестовый маркер.")
+                    return
+                }
+                panel.sharingType = .none
+                try await Task.sleep(for: .milliseconds(250))
+                let markerFound = try await compatibilityTester.containsTestMarker(on: displayID)
+                try Task.checkCancellation()
+                compatibilityResult = markerFound ? .captured : .excluded
+            } catch is CancellationError {
+                compatibilityResult = .notTested
+            } catch {
+                compatibilityResult = .failed((error as? LocalizedError)?.errorDescription ?? "ScreenCaptureKit вернул ошибку.")
+            }
+        }
+    }
 
     func resizeBy(dx: CGFloat, dy: CGFloat) {
         guard let panel, let screen = panel.screen ?? NSScreen.main else { return }
@@ -177,6 +304,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) { saveFrame(); isVisible = false }
 
     func shutdown() {
+        compatibilityTask?.cancel()
+        compatibilityTask = nil
+        isCompatibilityMarkerVisible = false
         hide()
         hotkeys.stop()
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }

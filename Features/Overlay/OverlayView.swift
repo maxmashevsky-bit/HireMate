@@ -38,6 +38,19 @@ struct OverlayView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius))
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.cornerRadius))
         .overlay(RoundedRectangle(cornerRadius: DesignTokens.cornerRadius).strokeBorder(.secondary.opacity(0.25)))
+        .overlay(alignment: .topLeading) {
+            if controller.isCompatibilityMarkerVisible {
+                HStack(spacing: 0) {
+                    Color(red: 1, green: 0, blue: 0.82)
+                    Color(red: 0, green: 1, blue: 0.82)
+                }
+                .frame(width: 128, height: 48)
+                .background(.black)
+                .padding(18)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+        }
         .tint(DesignTokens.accent)
         .preferredColorScheme(model.theme == .system ? nil : (model.theme == .dark ? .dark : .light))
         .onChange(of: controller.focusRequest) { _, _ in inputFocused = true }

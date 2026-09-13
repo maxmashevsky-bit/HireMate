@@ -88,6 +88,18 @@ struct DiagnosticsView: View {
                         model.overlay.toggleClickThrough()
                     }.disabled(!model.overlay.isVisible)
                 }
+                Divider()
+                LabeledContent("Тест ScreenCaptureKit", value: model.overlay.compatibilityResult.title)
+                Button(model.overlay.compatibilityResult == .running ? "Проверяем…" : "Проверить попадание окна в снимок") {
+                    model.overlay.testCaptureCompatibility()
+                }
+                .disabled(model.overlay.compatibilityResult == .running || model.screen != .granted)
+                if model.screen != .granted {
+                    Text("Для теста нужен разрешённый доступ к записи экрана. Сам тест запускается только этой кнопкой.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Text("Результат относится только к ScreenCaptureKit на этом Mac в момент проверки. Сторонние программы могут захватывать экран иначе; абсолютная невидимость не гарантируется.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Text("Рабочее окно остаётся поверх обычных окон и может быть видно в трансляции экрана. Режим пропуска кликов переключается в настройках окна или глобальным сочетанием.")
                     .font(.caption).foregroundStyle(.secondary)
             }
