@@ -56,7 +56,7 @@ struct OverlaySettingsView: View {
             if !controller.hotkeys.issues.isEmpty {
                 ForEach(controller.hotkeys.issues, id: \.self) { Text($0).font(.caption).foregroundStyle(.orange) }
             }
-            Text("Скрытие из трансляции не реализовано. Считайте окно видимым другим участникам, пока совместимость не проверена.")
+            Text(captureNotice)
                 .font(.caption).foregroundStyle(.secondary)
         }
         .onChange(of: controller.preferences.opacity) { _, _ in controller.applyOpacity() }
@@ -67,6 +67,21 @@ struct OverlaySettingsView: View {
     private var effectiveOverride: HotkeyOverride {
         controller.preferences.hotkeyOverride(for: selectedAction)
             ?? HotkeyOverride(key: selectedAction.defaultKey, usesShift: selectedAction.needsShift)
+    }
+
+    private var captureNotice: String {
+        switch controller.compatibilityResult {
+        case .excluded:
+            "Последний тест ScreenCaptureKit не увидел окно. Это не гарантирует скрытие в сторонних программах трансляции."
+        case .captured:
+            "Последний тест ScreenCaptureKit увидел окно. Считайте его видимым участникам трансляции."
+        case .running:
+            "Сейчас выполняется проверка ScreenCaptureKit."
+        case .failed(let message):
+            "Проверка ScreenCaptureKit не завершена: \(message)"
+        case .notTested:
+            "Окно исключается из ScreenCaptureKit публичным API, но сторонние программы могут захватывать его иначе. Проверьте результат в «Диагностике»."
+        }
     }
 
     private var effectiveShortcut: String {
