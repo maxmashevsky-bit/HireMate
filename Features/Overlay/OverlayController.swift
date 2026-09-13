@@ -148,7 +148,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         if let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) ?? NSScreen.main {
             let area = screen.visibleFrame
             let defaultFrame = NSRect(x: area.maxX - 884, y: area.maxY - 644, width: 860, height: 620)
-            restoreFrame(preferences.savedFrame(for: screen) ?? defaultFrame, on: screen)
+            restoreFrame(preferences.savedFrame(for: screen, minimumSize: window.minSize) ?? defaultFrame, on: screen)
         }
         applyOpacity()
         window.ignoresMouseEvents = isClickThrough
@@ -308,11 +308,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     private func restoreFrame(_ proposed: NSRect, on screen: NSScreen) {
         guard let panel else { return }
-        let area = screen.visibleFrame
-        let width = min(max(panel.minSize.width, proposed.width), area.width)
-        let height = min(max(panel.minSize.height, proposed.height), area.height)
-        let frame = NSRect(x: min(max(area.minX, proposed.minX), area.maxX - width),
-                           y: min(max(area.minY, proposed.minY), area.maxY - height), width: width, height: height)
+        guard let frame = OverlayPreferences.clampedFrame(proposed, to: screen.visibleFrame,
+                                                          minimumSize: panel.minSize) else { return }
         isRestoringFrame = true
         panel.setFrame(frame, display: true)
         isRestoringFrame = false
@@ -330,7 +327,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     private func saveFrame() {
         guard !isRestoringFrame, let panel, let screen = panel.screen else { return }
-        preferences.save(frame: panel.frame, screen: screen)
+        preferences.save(frame: panel.frame, screen: screen, minimumSize: panel.minSize)
     }
     func windowDidMove(_ notification: Notification) { saveFrame() }
     func windowDidResize(_ notification: Notification) { saveFrame() }

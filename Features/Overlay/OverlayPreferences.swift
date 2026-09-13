@@ -36,20 +36,32 @@ final class OverlayPreferences {
         else { hotkeyOverrides.removeValue(forKey: key) }
     }
 
-    func savedFrame(for screen: NSScreen) -> NSRect? {
+    func savedFrame(for screen: NSScreen, minimumSize: NSSize = NSSize(width: 640, height: 500)) -> NSRect? {
         let frames = defaults.dictionary(forKey: "overlay.frames") as? [String: String] ?? [:]
         guard let value = frames[screenKey(screen)] else { return nil }
-        let frame = NSRectFromString(value)
-        guard frame.origin.x.isFinite, frame.origin.y.isFinite,
-              frame.width.isFinite, frame.height.isFinite,
-              frame.width >= 360, frame.height >= 240 else { return nil }
-        return frame
+        return Self.clampedFrame(NSRectFromString(value), to: screen.visibleFrame, minimumSize: minimumSize)
     }
 
-    func save(frame: NSRect, screen: NSScreen) {
+    func save(frame: NSRect, screen: NSScreen, minimumSize: NSSize = NSSize(width: 640, height: 500)) {
+        guard let frame = Self.clampedFrame(frame, to: screen.visibleFrame, minimumSize: minimumSize) else { return }
         var frames = defaults.dictionary(forKey: "overlay.frames") as? [String: String] ?? [:]
         frames[screenKey(screen)] = NSStringFromRect(frame)
         defaults.set(frames, forKey: "overlay.frames")
+    }
+
+    static func clampedFrame(_ proposed: NSRect, to visibleFrame: NSRect,
+                             minimumSize: NSSize) -> NSRect? {
+        let values = [proposed.minX, proposed.minY, proposed.width, proposed.height,
+                      visibleFrame.minX, visibleFrame.minY, visibleFrame.width, visibleFrame.height,
+                      minimumSize.width, minimumSize.height]
+        guard values.allSatisfy(\.isFinite), visibleFrame.width > 0, visibleFrame.height > 0 else { return nil }
+        let minimumWidth = min(max(1, minimumSize.width), visibleFrame.width)
+        let minimumHeight = min(max(1, minimumSize.height), visibleFrame.height)
+        let width = min(max(minimumWidth, proposed.width), visibleFrame.width)
+        let height = min(max(minimumHeight, proposed.height), visibleFrame.height)
+        let x = min(max(visibleFrame.minX, proposed.minX), visibleFrame.maxX - width)
+        let y = min(max(visibleFrame.minY, proposed.minY), visibleFrame.maxY - height)
+        return NSRect(x: x, y: y, width: width, height: height)
     }
 
     private func screenKey(_ screen: NSScreen) -> String {
