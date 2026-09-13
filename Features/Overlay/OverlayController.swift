@@ -299,7 +299,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         historyScrollRequest += 1
     }
 
-    private func moveBy(dx: CGFloat, dy: CGFloat) {
+    func moveBy(dx: CGFloat, dy: CGFloat) {
         guard let panel, isVisible else { return }
         panel.setFrameOrigin(NSPoint(x: panel.frame.minX + dx, y: panel.frame.minY + dy))
         keepOnVisibleScreen()

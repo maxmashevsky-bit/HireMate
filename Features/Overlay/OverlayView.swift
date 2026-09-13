@@ -222,8 +222,38 @@ struct OverlayView: View {
             Button(controller.isClickThrough ? "Вернуть клики окну" : "Пропускать клики сквозь окно") {
                 appearanceSettings = false; controller.toggleClickThrough()
             }
+            Divider()
+            Text("Положение и размер").font(.headline)
+            HStack {
+                Text("Сдвинуть")
+                Spacer()
+                Button { controller.moveBy(dx: -24, dy: 0) } label: { Image(systemName: "arrow.left") }
+                    .help("Сдвинуть влево")
+                Button { controller.moveBy(dx: 0, dy: 24) } label: { Image(systemName: "arrow.up") }
+                    .help("Сдвинуть вверх")
+                Button { controller.moveBy(dx: 0, dy: -24) } label: { Image(systemName: "arrow.down") }
+                    .help("Сдвинуть вниз")
+                Button { controller.moveBy(dx: 24, dy: 0) } label: { Image(systemName: "arrow.right") }
+                    .help("Сдвинуть вправо")
+            }
+            HStack {
+                Text("Ширина")
+                Spacer()
+                Button { controller.resizeBy(dx: -24, dy: 0) } label: { Image(systemName: "minus") }
+                    .help("Уменьшить ширину")
+                Button { controller.resizeBy(dx: 24, dy: 0) } label: { Image(systemName: "plus") }
+                    .help("Увеличить ширину")
+            }
+            HStack {
+                Text("Высота")
+                Spacer()
+                Button { controller.resizeBy(dx: 0, dy: -24) } label: { Image(systemName: "minus") }
+                    .help("Уменьшить высоту")
+                Button { controller.resizeBy(dx: 0, dy: 24) } label: { Image(systemName: "plus") }
+                    .help("Увеличить высоту")
+            }
             Text("Вернуть ввод: \(preferences.shortcutPreset.symbols)D").font(.caption)
-        }.padding(20).frame(width: 300)
+        }.buttonStyle(.borderless).padding(20).frame(width: 330)
     }
 
     private var newChatForm: some View {
