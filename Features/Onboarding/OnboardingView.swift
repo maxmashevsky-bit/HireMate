@@ -5,6 +5,9 @@ import CopilotCore
 struct OnboardingView: View {
     @Bindable var model: AppModel
     @State private var step = 0
+    @State private var audioTest: Task<Void, Never>?
+    @State private var audioTestPeak: Float = 0
+    @State private var audioTestMessage = ""
     private let titles = ["Добро пожаловать", "Ваши данные остаются на Mac", "Микрофон — по вашему действию",
                           "Доступ к экрану", "Проверка звука", "Выбор провайдера", "Первый контекст"]
     var body: some View {
@@ -29,7 +32,22 @@ struct OnboardingView: View {
                     Text("Экран: \(model.screen.title). Можно пропустить. Даже после разрешения приложение не начнёт захват автоматически.")
                     Button("Запросить доступ к экрану") { model.requestScreen() }.disabled(model.screen == .granted)
                 case 4:
-                    Text("После знакомства откройте «Звук», разрешите выбранный источник и запустите захват. Индикатор уровня и фрагменты доступны там. Автоматический тест звука в этом маршруте пока отсутствует.")
+                    Text("Нажмите кнопку и говорите обычным голосом три секунды. Проверка использует только микрофон, ничего не записывает на диск и не обращается к сети.")
+                    ProgressView(value: min(1, Double(audioTestPeak) * 5))
+                    HStack {
+                        Button(audioTest != nil ? "Микрофон проверяется…" : "Проверить микрофон") {
+                            startAudioTest()
+                        }
+                        .disabled(model.microphone != .granted || audioTest != nil || model.audio.isRunning || model.audio.isStarting || model.audio.isStopping)
+                        if audioTest != nil {
+                            Button("Остановить проверку") { audioTest?.cancel() }
+                        }
+                    }
+                    if model.microphone != .granted {
+                        Text("Сначала разрешите микрофон на предыдущем шаге.").foregroundStyle(.secondary)
+                    } else if !audioTestMessage.isEmpty {
+                        Text(audioTestMessage).foregroundStyle(audioTestPeak > 0.001 ? .green : .secondary)
+                    }
                 case 5:
                     Text("По умолчанию используется Fake Provider: готовые учебные примеры без сети и API-ключа. Собственный API можно настроить отдельно. Демо не анализирует введённый вопрос.")
                 default:
@@ -42,13 +60,66 @@ struct OnboardingView: View {
             }.font(.body)
             Spacer()
             HStack {
-                Button("Назад") { step -= 1 }.disabled(step == 0)
+                Button("Назад") { step -= 1 }.disabled(step == 0 || audioTest != nil)
                 Spacer()
-                Button("Завершить знакомство позже") { model.showOnboarding = false }
+                Button("Завершить знакомство позже") { model.showOnboarding = false }.disabled(audioTest != nil)
                 Button(step == 6 ? "Начать демо" : "Далее") {
                     if step == 6 { model.finishOnboarding() } else { step += 1 }
-                }.buttonStyle(.borderedProminent)
+                }.buttonStyle(.borderedProminent).disabled(audioTest != nil)
             }
-        }.padding(30).frame(width: 690, height: 450).tint(DesignTokens.accent)
+        }
+        .padding(30).frame(width: 690, height: 450).tint(DesignTokens.accent)
+        .onDisappear {
+            guard audioTest != nil else { return }
+            audioTest?.cancel()
+            Task { await model.audio.stop(reason: "Проверка микрофона остановлена") }
+        }
+    }
+
+    private func startAudioTest() {
+        guard audioTest == nil, model.microphone == .granted,
+              !model.audio.isRunning, !model.audio.isStarting, !model.audio.isStopping else { return }
+        let oldMode = model.audio.inputMode
+        let oldQuestionMode = model.audio.questionMode
+        let oldConsent = model.audio.consent
+        audioTestPeak = 0
+        audioTestMessage = "Подключаем микрофон…"
+        model.audio.inputMode = .microphone
+        model.audio.questionMode = .manual
+        model.audio.consent = true
+        model.audio.start()
+        audioTest = Task { @MainActor in
+            var started = false
+            for _ in 0..<30 {
+                if Task.isCancelled { break }
+                if model.audio.isRunning { started = true; break }
+                if !model.audio.isStarting { break }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            if started {
+                audioTestMessage = "Говорите…"
+                for _ in 0..<30 {
+                    if Task.isCancelled { break }
+                    audioTestPeak = max(audioTestPeak, model.audio.levels[.microphone] ?? 0)
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+            }
+            let wasCancelled = Task.isCancelled
+            let startFailure = model.audio.status
+            await model.audio.stop(reason: "Проверка микрофона завершена")
+            model.audio.inputMode = oldMode
+            model.audio.questionMode = oldQuestionMode
+            model.audio.consent = oldConsent
+            audioTest = nil
+            if wasCancelled {
+                audioTestMessage = "Проверка остановлена."
+            } else if !started {
+                audioTestMessage = "Не удалось начать проверку: \(startFailure)"
+            } else if audioTestPeak > 0.001 {
+                audioTestMessage = "Микрофон работает. Сигнал получен локально."
+            } else {
+                audioTestMessage = "Микрофон подключён, но сигнал слишком тихий. Проверьте устройство ввода macOS."
+            }
+        }
     }
 }
