@@ -175,8 +175,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
         isVisible = false
     }
 
-    func openMain(_ section: AppSection) {
-        model?.requestedSection = section
+    func openMain(_ section: AppSection? = nil) {
+        if let section { model?.requestedSection = section }
         hide()
         NSApp.activate(ignoringOtherApps: true)
         if let openMainWindow { openMainWindow() }

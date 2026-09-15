@@ -110,7 +110,7 @@ struct OverlayView: View {
                     .help("Показать или скрыть заметки")
                 Button { controller.teleprompter.toggle() } label: { Image(systemName: "text.viewfinder") }
                     .help("Показать или скрыть телесуфлёр")
-                Button { controller.openMain(.home) } label: { Image(systemName: "house") }.help("Главный экран")
+                Button { controller.openMain() } label: { Image(systemName: "house") }.help("Вернуться в главное окно")
             }
             .buttonStyle(.borderless)
             .padding(.horizontal, 14).padding(.vertical, 8)

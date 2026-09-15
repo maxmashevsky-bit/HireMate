@@ -7,7 +7,7 @@ struct MaxInterviewCopilotApp: App {
     @NSApplicationDelegateAdaptor(AppLifecycle.self) private var lifecycle
     @State private var model = AppModel()
     var body: some Scene {
-        WindowGroup("HireMate", id: "main") {
+        Window("HireMate", id: "main") {
             AppShell(model: model)
                 .frame(minWidth: 1040, minHeight: 700)
                 .preferredColorScheme(model.theme == .system ? nil : (model.theme == .dark ? .dark : .light))
