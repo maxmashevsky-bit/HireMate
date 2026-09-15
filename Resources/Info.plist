@@ -9,6 +9,7 @@
 <key>CFBundleShortVersionString</key><string>0.1.0</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>LSMinimumSystemVersion</key><string>15.0</string>
+<key>LSMultipleInstancesProhibited</key><true/>
 <key>CFBundleDevelopmentRegion</key><string>ru</string>
 <key>CFBundleLocalizations</key><array><string>ru</string></array>
 <key>NSMicrophoneUsageDescription</key><string>Доступ к микрофону используется только после вашего действия для разрешённой встречи.</string>

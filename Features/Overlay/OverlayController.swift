@@ -88,6 +88,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     let teleprompter = TeleprompterController()
     private let compatibilityTester: any OverlayCompatibilityTesting
     private weak var model: AppModel?
+    private weak var mainWindow: NSWindow?
     var openMainWindow: (() -> Void)?
     private var panel: CopilotPanel?
     private var screenObserver: NSObjectProtocol?
@@ -136,7 +137,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
     }
 
-    func toggle() { isVisible ? hide() : show() }
+    func registerMainWindow(_ window: NSWindow) { mainWindow = window }
+
+    func toggle() { isVisible ? openMain() : show() }
     func show() {
         guard let model else { return }
         let window: CopilotPanel
@@ -165,6 +168,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
         applyOpacity()
         window.ignoresMouseEvents = isClickThrough
+        if mainWindow == nil {
+            mainWindow = NSApp.windows.first { $0 !== window && $0.canBecomeMain && $0.title == "HireMate" }
+        }
+        mainWindow?.orderOut(nil)
         window.orderFrontRegardless()
         isVisible = true
     }
@@ -179,10 +186,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
         if let section { model?.requestedSection = section }
         hide()
         NSApp.activate(ignoringOtherApps: true)
-        if let openMainWindow { openMainWindow() }
-        else if let main = NSApp.windows.first(where: { $0.canBecomeMain }) {
-            main.makeKeyAndOrderFront(nil)
-        }
+        if let mainWindow { mainWindow.makeKeyAndOrderFront(nil) }
+        else if let openMainWindow { openMainWindow() }
     }
 
     func toggleClickThrough() {

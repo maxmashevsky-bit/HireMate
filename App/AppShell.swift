@@ -57,7 +57,7 @@ struct AppShell: View {
             }
         }
         .background(DesignTokens.canvas)
-        .background(MainWindowCaptureProtection())
+        .background(MainWindowCaptureProtection(controller: model.overlay))
         .ignoresSafeArea(.container, edges: .top)
         .tint(DesignTokens.accent)
         .onAppear {
@@ -153,15 +153,22 @@ struct AppShell: View {
 
 @MainActor
 private struct MainWindowCaptureProtection: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView { CaptureProtectionView() }
+    let controller: OverlayController
+
+    func makeNSView(context: Context) -> NSView { CaptureProtectionView(controller: controller) }
     func updateNSView(_ nsView: NSView, context: Context) {
         nsView.window?.sharingType = .none
+        if let window = nsView.window { controller.registerMainWindow(window) }
     }
 
     private final class CaptureProtectionView: NSView {
+        weak var controller: OverlayController?
+        init(controller: OverlayController) { self.controller = controller; super.init(frame: .zero) }
+        required init?(coder: NSCoder) { nil }
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             window?.sharingType = .none
+            if let window { controller?.registerMainWindow(window) }
         }
     }
 }

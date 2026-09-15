@@ -82,7 +82,12 @@ struct MeetingsView: View {
             Spacer()
             Label(meeting.updatedAt.formatted(date: .omitted, time: .shortened), systemImage: "clock").font(.caption).foregroundStyle(.secondary)
             Label("1", systemImage: "bubble.left.and.bubble.right").font(.caption).foregroundStyle(.secondary)
-            Button { Task { await app.conversation.open(meeting); app.overlay.show() } } label: { Image(systemName: "play.fill") }
+            Button {
+                Task {
+                    await app.conversation.open(meeting)
+                    if app.conversation.meeting.id == meeting.id { app.overlay.show() }
+                }
+            } label: { Image(systemName: "play.fill") }
                 .buttonStyle(HMPrimaryButtonStyle()).help("Продолжить встречу")
             Button { } label: { Image(systemName: "link") }.help("Связать с вакансией")
             Button { app.requestedSection = .notes } label: { Image(systemName: "note.text") }.help("Открыть заметки")
@@ -104,7 +109,10 @@ struct MeetingsView: View {
         app.speech.stop()
         Task {
             switch action {
-            case .createMeeting: await app.conversation.createMeeting()
+            case .createMeeting:
+                let previousID = app.conversation.meeting.id
+                await app.conversation.createMeeting()
+                if app.conversation.meeting.id != previousID { app.overlay.show() }
             case .createChat: await app.conversation.createSubchat()
             case .open(let meeting): await app.conversation.open(meeting)
             }
