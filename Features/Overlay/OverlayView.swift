@@ -80,12 +80,17 @@ struct OverlayView: View {
 
     private var header: some View {
         HStack(spacing: 14) {
-            Image(systemName: "bubble.left.and.text.bubble.right.fill").foregroundStyle(DesignTokens.accent)
+            Image(systemName: "asterisk").font(.title2.bold()).foregroundStyle(DesignTokens.accent)
+            Button { toggleAudio() } label: {
+                Image(systemName: model.audio.isRunning ? "mic.fill" : "mic")
+                    .font(.title3).foregroundStyle(model.audio.isRunning ? Color.red : .primary)
+            }.help(model.audio.isRunning ? "Остановить захват" : "Запустить захват")
             Button { audioSettings.toggle() } label: {
-                Label(model.audio.isRunning ? "Звук включён" : "Звук", systemImage: model.audio.isRunning ? "waveform" : "mic")
-                    .foregroundStyle(model.audio.isRunning ? Color.red : .primary)
-            }.popover(isPresented: $audioSettings) {
-                AudioCaptureView(audio: model.audio).frame(width: 460, height: 560)
+                Image(systemName: audioSettings ? "chevron.down" : "chevron.up").font(.headline)
+            }
+            .help("Режим и настройки микрофона")
+            .popover(isPresented: $audioSettings, arrowEdge: .bottom) {
+                InterviewAudioMenu(model: model).frame(width: 360)
             }
             Spacer(minLength: 0)
             DragHandle(controller: controller).frame(width: 28, height: 28).accessibilityLabel("Перетащить окно")
@@ -107,6 +112,17 @@ struct OverlayView: View {
             Button { controller.openMain(.home) } label: { Image(systemName: "house") }.help("Главный экран")
             Button { controller.hide() } label: { Image(systemName: "xmark") }.help("Скрыть окно")
         }.buttonStyle(.borderless).padding(.horizontal, 14).padding(.vertical, 8)
+    }
+
+    private func toggleAudio() {
+        guard !model.audio.isStarting, !model.audio.isStopping, !model.audio.isClearing else { return }
+        if model.audio.isRunning {
+            Task { await model.audio.stop() }
+        } else if model.audio.consent {
+            model.audio.start()
+        } else {
+            audioSettings = true
+        }
     }
 
     private var chatRail: some View {
@@ -228,7 +244,7 @@ struct OverlayView: View {
             }.buttonStyle(.borderless)
             SpeechControls(app: model)
             Text(model.demoStatus).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
-            Text("Окно может быть видно при трансляции экрана.").font(.caption2).foregroundStyle(.secondary)
+            Text("Окно исключено из штатного захвата экрана macOS.").font(.caption2).foregroundStyle(.secondary)
         }.padding(12)
     }
 
@@ -374,6 +390,90 @@ struct OverlayView: View {
                 }.disabled(chatTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || busy)
             }
         }.padding(24).frame(width: 360)
+    }
+}
+
+@MainActor
+private struct InterviewAudioMenu: View {
+    @Bindable var model: AppModel
+    @State private var translationLanguage = "Отключено"
+
+    private var transcriptionModel: String {
+        let configured = model.providerSettings.configuration.transcriptionModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        return configured.isEmpty ? "Демо-распознавание" : configured
+    }
+
+    var body: some View {
+        @Bindable var audio = model.audio
+        VStack(alignment: .leading, spacing: 6) {
+            modeButton(.automatic, title: "VAD", subtitle: "Сам определяет речь", symbol: "waveform")
+            modeButton(.manual, title: "Start / Stop", subtitle: "Пишет между двумя нажатиями", symbol: "togglepower")
+            modeButton(.oneShot, title: "One-Shot", subtitle: "Берёт последние \(Int(audio.configuration.oneShot)) секунд", symbol: "bolt")
+            Divider().padding(.vertical, 5)
+            Menu {
+                Text(transcriptionModel)
+                Button("Открыть настройки моделей") { model.requestedSection = .settings }
+            } label: {
+                optionRow(title: "Модель расшифровки", value: transcriptionModel, symbol: "cpu")
+            }
+            Menu {
+                ForEach(TranscriptionLanguage.allCases) { language in
+                    Button(language.title) { model.transcription.language = language }
+                }
+            } label: {
+                optionRow(title: "Язык расшифровки", value: model.transcription.language.title, symbol: "character.book.closed")
+            }
+            Menu {
+                ForEach(["Отключено", "Русский", "Английский"], id: \.self) { language in
+                    Button(language) { translationLanguage = language }
+                }
+            } label: {
+                optionRow(title: "Язык перевода", value: translationLanguage, symbol: "character.bubble")
+            }
+            Divider().padding(.top, 5)
+            Toggle("Согласие участников получено", isOn: $audio.consent)
+                .font(.caption).disabled(audio.isRunning || audio.isStarting || audio.isStopping)
+            if audio.isRunning {
+                Label("Захват включён · \(Int(audio.elapsed)) с", systemImage: "record.circle")
+                    .font(.caption.weight(.semibold)).foregroundStyle(.red)
+            }
+        }
+        .padding(12)
+        .background(DesignTokens.card)
+    }
+
+    private func modeButton(_ mode: AudioQuestionMode, title: String, subtitle: String, symbol: String) -> some View {
+        Button {
+            guard !model.audio.isRunning, !model.audio.isStarting, !model.audio.isStopping else { return }
+            model.audio.questionMode = mode
+        } label: {
+            HStack(spacing: 13) {
+                Image(systemName: symbol).font(.title3).frame(width: 28).foregroundStyle(mode == model.audio.questionMode ? DesignTokens.accent : .primary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.headline)
+                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(10)
+            .background(mode == model.audio.questionMode ? DesignTokens.accentSoft : .clear,
+                        in: RoundedRectangle(cornerRadius: 9))
+        }
+        .buttonStyle(.plain)
+        .disabled(model.audio.isRunning || model.audio.isStarting || model.audio.isStopping)
+    }
+
+    private func optionRow(title: String, value: String, symbol: String) -> some View {
+        HStack(spacing: 13) {
+            Image(systemName: symbol).font(.title3).frame(width: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.headline)
+                Text(value).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            Image(systemName: "chevron.right").font(.caption.bold())
+        }
+        .contentShape(Rectangle()).padding(.horizontal, 10).padding(.vertical, 8)
     }
 }
 
