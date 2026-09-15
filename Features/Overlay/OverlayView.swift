@@ -79,39 +79,43 @@ struct OverlayView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 14) {
-            Image(systemName: "asterisk").font(.title2.bold()).foregroundStyle(DesignTokens.accent)
-            Button { toggleAudio() } label: {
-                Image(systemName: model.audio.isRunning ? "mic.fill" : "mic")
-                    .font(.title3).foregroundStyle(model.audio.isRunning ? Color.red : .primary)
-            }.help(model.audio.isRunning ? "Остановить захват" : "Запустить захват")
-            Button { audioSettings.toggle() } label: {
-                Image(systemName: audioSettings ? "chevron.down" : "chevron.up").font(.headline)
+        ZStack {
+            WindowDragArea(controller: controller)
+                .accessibilityLabel("Перетащить окно")
+            HStack(spacing: 14) {
+                Image(systemName: "asterisk").font(.title2.bold()).foregroundStyle(DesignTokens.accent)
+                Button { toggleAudio() } label: {
+                    Image(systemName: model.audio.isRunning ? "mic.fill" : "mic")
+                        .font(.title3).foregroundStyle(model.audio.isRunning ? Color.red : .primary)
+                }.help(model.audio.isRunning ? "Остановить захват" : "Запустить захват")
+                Button { audioSettings.toggle() } label: {
+                    Image(systemName: audioSettings ? "chevron.down" : "chevron.up").font(.headline)
+                }
+                .help("Режим и настройки микрофона")
+                .popover(isPresented: $audioSettings, arrowEdge: .bottom) {
+                    InterviewAudioMenu(model: model).frame(width: 360)
+                }
+                Spacer(minLength: 24)
+                Button { providerSettings.toggle() } label: {
+                    Label(model.providerSettings.configuration.mode == .demo ? "Демо · без сети" : model.providerSettings.configuration.textModel,
+                          systemImage: "cpu").lineLimit(1)
+                }.popover(isPresented: $providerSettings) {
+                    Form { ProviderConfigurationView(settings: model.providerSettings) }
+                        .formStyle(.grouped).frame(width: 450, height: 480)
+                }
+                Button { appearanceSettings.toggle() } label: { Image(systemName: "slider.horizontal.3") }
+                    .help("Прозрачность и управление окном")
+                    .popover(isPresented: $appearanceSettings) { appearanceForm }
+                Button { controller.toggleNotesPanel() } label: { Image(systemName: "note.text") }
+                    .help("Показать или скрыть заметки")
+                Button { controller.teleprompter.toggle() } label: { Image(systemName: "text.viewfinder") }
+                    .help("Показать или скрыть телесуфлёр")
+                Button { controller.openMain(.home) } label: { Image(systemName: "house") }.help("Главный экран")
+                Button { controller.hide() } label: { Image(systemName: "xmark") }.help("Скрыть окно")
             }
-            .help("Режим и настройки микрофона")
-            .popover(isPresented: $audioSettings, arrowEdge: .bottom) {
-                InterviewAudioMenu(model: model).frame(width: 360)
-            }
-            Spacer(minLength: 0)
-            DragHandle(controller: controller).frame(width: 28, height: 28).accessibilityLabel("Перетащить окно")
-            Spacer(minLength: 0)
-            Button { providerSettings.toggle() } label: {
-                Label(model.providerSettings.configuration.mode == .demo ? "Демо · без сети" : model.providerSettings.configuration.textModel,
-                      systemImage: "cpu").lineLimit(1)
-            }.popover(isPresented: $providerSettings) {
-                Form { ProviderConfigurationView(settings: model.providerSettings) }
-                    .formStyle(.grouped).frame(width: 450, height: 480)
-            }
-            Button { appearanceSettings.toggle() } label: { Image(systemName: "slider.horizontal.3") }
-                .help("Прозрачность и управление окном")
-                .popover(isPresented: $appearanceSettings) { appearanceForm }
-            Button { controller.toggleNotesPanel() } label: { Image(systemName: "note.text") }
-                .help("Показать или скрыть заметки")
-            Button { controller.teleprompter.toggle() } label: { Image(systemName: "text.viewfinder") }
-                .help("Показать или скрыть телесуфлёр")
-            Button { controller.openMain(.home) } label: { Image(systemName: "house") }.help("Главный экран")
-            Button { controller.hide() } label: { Image(systemName: "xmark") }.help("Скрыть окно")
-        }.buttonStyle(.borderless).padding(.horizontal, 14).padding(.vertical, 8)
+            .buttonStyle(.borderless)
+            .padding(.horizontal, 14).padding(.vertical, 8)
+        }
     }
 
     private func toggleAudio() {
@@ -478,7 +482,7 @@ private struct InterviewAudioMenu: View {
 }
 
 @MainActor
-private struct DragHandle: NSViewRepresentable {
+private struct WindowDragArea: NSViewRepresentable {
     let controller: OverlayController
     func makeNSView(context: Context) -> HandleView {
         let view = HandleView()
@@ -490,13 +494,5 @@ private struct DragHandle: NSViewRepresentable {
     final class HandleView: NSView {
         weak var controller: OverlayController?
         override func mouseDown(with event: NSEvent) { controller?.startDragging(event) }
-        override func draw(_ dirtyRect: NSRect) {
-            NSColor.secondaryLabelColor.setFill()
-            for x in [CGFloat(8), CGFloat(14)] {
-                for y in [CGFloat(8), CGFloat(14), CGFloat(20)] {
-                    NSBezierPath(ovalIn: NSRect(x: x, y: y, width: 2, height: 2)).fill()
-                }
-            }
-        }
     }
 }
