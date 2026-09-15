@@ -18,67 +18,76 @@ struct ContextEditorView: View {
     var body: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Контексты").font(.title3.bold()).padding(.bottom, 5)
                 ForEach(ProfileID.allCases) { profile in
                     Button {
                         if !dirty { app.profile = profile }
                     } label: {
                         HStack {
-                            Image(systemName: profile == app.profile ? "checkmark.circle.fill" : "circle")
-                            VStack(alignment: .leading, spacing: 2) { Text(profile.title).font(.callout.weight(.semibold)); Text(profile == app.profile ? "Активный" : "Отдельная история").font(.caption2).foregroundStyle(.secondary) }
+                            Image(systemName: profile == app.profile ? "slider.horizontal.3" : "briefcase")
+                            Text(profile.title).font(.callout.weight(.semibold))
                             Spacer()
-                        }.padding(9).background(profile == app.profile ? DesignTokens.accentSoft : .clear, in: RoundedRectangle(cornerRadius: 9))
+                        }.padding(10).background(profile == app.profile ? DesignTokens.elevated : .clear, in: RoundedRectangle(cornerRadius: 9))
                             .foregroundStyle(profile == app.profile ? DesignTokens.accent : .primary)
                     }.buttonStyle(.plain)
                 }
                 Spacer()
-                Button("Новый контекст", systemImage: "plus") { saveMessage = "Пользовательские контексты будут добавлены отдельным сохранением." }
-                    .buttonStyle(HMPrimaryButtonStyle())
-            }.padding(14).frame(width: 218).background(DesignTokens.sidebar)
+                Button("Новый контекст", systemImage: "plus") { saveMessage = "Создание пользовательского контекста пока доступно только как макет." }
+                    .buttonStyle(.plain).font(.headline)
+            }.padding(14).frame(width: 250).background(DesignTokens.sidebar)
             Divider()
             VStack(spacing: 0) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
-                        HStack {
-                            HMSectionHeader(title: edited.name, subtitle: "Настройка языка, формата ответа и локального контекста")
-                            Spacer()
-                            HMStatusPill(text: "Используется")
-                            Button("Копия", systemImage: "doc.on.doc") {}
-                            Button("Протестировать", systemImage: "play") { app.requestedSection = .home }
-                            Button { } label: { Image(systemName: "trash") }.help("Удалить контекст")
-                        }
-                        HMPanel("Основные параметры") {
-                            TextField("Название", text: $edited.name)
-                            TextField("Целевая роль", text: $edited.role)
-                            Picker("Язык ответа", selection: $edited.responseLanguage) { Text("Русский"); Text("English") }
-                            TextField("Темы и технологии через запятую", text: $technologies)
-                            Toggle("Первое лицо — только по подтверждённым фактам", isOn: $edited.firstPerson)
+                        Text(edited.name).font(.title2.bold())
+                        HMPanel("Языки ответа", subtitle: "Первый язык в списке — на нём модель генерирует ответ. Второй и третий — машинный перевод этого текста.") {
+                            HStack {
+                                Text(edited.responseLanguage)
+                                    .font(.callout.weight(.semibold)).foregroundStyle(DesignTokens.accent)
+                                    .padding(.horizontal, 11).padding(.vertical, 6)
+                                    .background(DesignTokens.accentSoft, in: Capsule())
+                                Image(systemName: "xmark").font(.caption).foregroundStyle(DesignTokens.accent)
+                            }
+                            Menu("Добавить язык…") {
+                                Button("Русский") { edited.responseLanguage = "Русский" }
+                                Button("English") { edited.responseLanguage = "English" }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            Text("Выбрано 1 из 3").font(.caption).foregroundStyle(.secondary)
                         }
                         HMPanel("Контекст") {
-                            TextEditor(text: $edited.companyInfo).frame(minHeight: 95)
-                            Text("Компания, вакансия и информация, которую можно учитывать в ответах.").font(.caption).foregroundStyle(.secondary)
+                            TextEditor(text: $edited.companyInfo)
+                                .font(.body).frame(minHeight: 300)
+                                .overlay(alignment: .topLeading) {
+                                    if edited.companyInfo.isEmpty {
+                                        Text("Введите собственный контекст").foregroundStyle(.secondary).padding(7).allowsHitTesting(false)
+                                    }
+                                }
                         }
-                        HMPanel("Язык и структура ответа") {
-                            TextEditor(text: $edited.answerFormat).frame(minHeight: 105)
-                        }
-                        HMPanel("Локальные заметки") {
-                            Toggle("Использовать подходящие фрагменты заметок", isOn: $edited.usesNotes)
-                            TextField("Теги заметок", text: $noteTags)
-                        }
-                        HMPanel("Дополнительные инструкции") { TextEditor(text: $edited.additionalInstructions).frame(minHeight: 85) }
-                        HMPanel("Подтверждённые факты опыта") {
-                            TextEditor(text: $facts).frame(minHeight: 100)
-                            Toggle("Подтверждаю достоверность перечисленных фактов", isOn: $factsConfirmed)
+                        DisclosureGroup("Дополнительные параметры") {
+                            VStack(spacing: 12) {
+                                TextField("Название", text: $edited.name)
+                                TextField("Целевая роль", text: $edited.role)
+                                TextField("Темы и технологии через запятую", text: $technologies)
+                                TextEditor(text: $edited.answerFormat).frame(minHeight: 90)
+                                Toggle("Использовать подходящие фрагменты заметок", isOn: $edited.usesNotes)
+                                TextField("Теги заметок", text: $noteTags)
+                                TextEditor(text: $edited.additionalInstructions).frame(minHeight: 75)
+                                TextEditor(text: $facts).frame(minHeight: 80)
+                                Toggle("Подтверждаю достоверность фактов", isOn: $factsConfirmed)
+                            }.padding(.top, 10)
                         }
                     }.padding(22).frame(maxWidth: 980)
                 }
                 Divider()
-                HStack {
+                HStack(spacing: 10) {
                     Text(saveMessage).font(.caption).foregroundStyle(.secondary)
                     Spacer()
-                    Button("Отменить правки") { load() }
-                    Button("Сохранить") { Task { await save() } }.buttonStyle(HMPrimaryButtonStyle())
+                    Button("Сохранить") { Task { await save() } }.buttonStyle(HMPrimaryButtonStyle()).frame(minWidth: 300)
                         .disabled(!facts.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !factsConfirmed)
+                    Button("Деактивировать") { }
+                    Button("Протестировать") { app.requestedSection = .home }
+                    Button { } label: { Image(systemName: "doc.on.doc") }.help("Создать копию")
+                    Button { } label: { Image(systemName: "trash") }.help("Удалить контекст")
                 }.padding(14).background(DesignTokens.sidebar)
             }
         }.background(DesignTokens.canvas)

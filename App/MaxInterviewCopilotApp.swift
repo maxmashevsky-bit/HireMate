@@ -18,6 +18,7 @@ struct MaxInterviewCopilotApp: App {
                 }
         }
         .defaultSize(width: 1240, height: 820)
+        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(after: .help) {
                 Button("Открыть знакомство с приложением") { model.showOnboarding = true }

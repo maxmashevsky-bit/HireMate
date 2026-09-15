@@ -13,18 +13,12 @@ struct NotesView: View {
         @Bindable var model = app.notes
         HSplitView {
             VStack(alignment: .leading, spacing: 10) {
-                HStack { Text("Заметки").font(.title3.bold()); Spacer(); Text("\(model.notes.count)").foregroundStyle(.secondary) }
-                Text(app.profile.title).font(.caption).foregroundStyle(.secondary)
-                TextField("Полнотекстовый поиск", text: $model.query).onSubmit { Task { await model.refresh() } }
-                HStack {
-                    Button("Найти") { Task { await model.refresh() } }
-                    Button("Новая заметка", systemImage: "plus") { model.create() }
-                    Button("Импорт") { Task { await importNote() } }.disabled(model.hasEdits || model.isBusy)
-                }
-                Toggle("Показывать архив", isOn: $model.includeArchived)
-                    .onChange(of: model.includeArchived) { _, _ in Task { await model.refresh() } }
+                Text("Заметки").font(.title2.bold())
+                Text("\(model.notes.count) заметок · \(Set(model.notes.compactMap(\.folder)).count) папок")
+                    .font(.caption).foregroundStyle(.secondary)
+                Divider()
                 List {
-                    Section("Папки") {
+                    Section {
                         Label("Без папки", systemImage: "folder").badge(model.notes.filter { ($0.folder ?? "").isEmpty }.count)
                         ForEach(Array(Set(model.notes.compactMap(\.folder))).sorted(), id: \.self) { folder in
                             Label(folder, systemImage: "folder.fill").badge(model.notes.filter { $0.folder == folder }.count)
@@ -41,9 +35,18 @@ struct NotesView: View {
                         }
                     }
                 }
-                Text("Список ограничен 500 заметками. Для точного отбора используйте поиск.").font(.caption2)
-                HStack { Button("Папка", systemImage: "folder.badge.plus") {}; Button("Файл", systemImage: "doc.badge.plus") { Task { await importNote() } } }
-            }.padding().frame(minWidth: 230, idealWidth: 260, maxWidth: 340)
+                Button { model.create() } label: {
+                    Label("Новая заметка", systemImage: "plus")
+                        .frame(maxWidth: .infinity).frame(height: 38)
+                        .foregroundStyle(.black.opacity(0.75))
+                        .background(.white, in: RoundedRectangle(cornerRadius: 8))
+                }.buttonStyle(.plain)
+                HStack {
+                    Button("Папка", systemImage: "folder.badge.plus") { }
+                    Button("Файлы", systemImage: "square.and.arrow.up") { Task { await importNote() } }
+                }.frame(maxWidth: .infinity)
+                Button("Проект", systemImage: "doc.badge.gearshape") { }.frame(maxWidth: .infinity)
+            }.padding().frame(minWidth: 300, idealWidth: 340, maxWidth: 370).background(DesignTokens.sidebar)
             VStack(alignment: .leading, spacing: 12) {
                 if let note = model.edited {
                     HStack {
@@ -87,7 +90,13 @@ struct NotesView: View {
                         Button("Удалить", role: .destructive) { confirmDelete = true }.disabled(model.isBusy)
                         if model.isBusy { Button("Отменить индексацию") { model.cancelSave() } }
                     }
-                } else { ContentUnavailableView("Выберите или создайте заметку", systemImage: "note.text") }
+                } else {
+                    VStack(spacing: 14) {
+                        Text("Выберите заметку или создайте новую").font(.title3.bold())
+                        Text("Здесь можно хранить дополнительный контекст для нейросети:\nлегенду о себе, готовые ответы на частые вопросы, технические\nтермины и любую другую информацию. Всё, что вы напишете, ИИ\nбудет учитывать при генерации ответов.")
+                            .multilineTextAlignment(.center).foregroundStyle(.secondary).lineSpacing(3)
+                    }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
                 Text(model.status).font(.caption).foregroundStyle(.secondary)
             }.padding().frame(minWidth: 460).background(DesignTokens.canvas)
         }.background(DesignTokens.canvas).task { await model.refresh() }

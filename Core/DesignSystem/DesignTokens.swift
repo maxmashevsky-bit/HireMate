@@ -4,9 +4,9 @@ enum DesignTokens {
     static let spacing: CGFloat = 20
     static let cornerRadius: CGFloat = 13
     static let contentWidth: CGFloat = 1320
-    static let accent = Color(red: 1.00, green: 0.52, blue: 0.04)
-    static let accentSoft = Color(red: 1.00, green: 0.52, blue: 0.04).opacity(0.16)
-    static let success = Color(red: 0.22, green: 0.82, blue: 0.55)
+    static let accent = Color(red: 0.25, green: 0.94, blue: 0.64)
+    static let accentSoft = Color(red: 0.25, green: 0.94, blue: 0.64).opacity(0.16)
+    static let success = accent
     static let canvas = adaptive(dark: 0x121615, light: 0xF3F5F3)
     static let sidebar = adaptive(dark: 0x191E1C, light: 0xE9EDE9)
     static let card = adaptive(dark: 0x202624, light: 0xFFFFFF)
@@ -92,7 +92,7 @@ struct HMPrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.callout.weight(.semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(.black.opacity(0.82))
             .padding(.horizontal, 14).padding(.vertical, 8)
             .background(DesignTokens.accent.opacity(configuration.isPressed ? 0.72 : 1), in: RoundedRectangle(cornerRadius: 8))
     }

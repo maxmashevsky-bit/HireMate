@@ -9,31 +9,23 @@ struct MeetingsView: View {
     @State private var deletion: Meeting?
     @State private var deleteChat = false
     @State private var renamedChat = ""
-    @State private var search = ""
     @State private var includeVacancy = false
     @State private var pendingNavigation: Navigation?
     private enum Navigation { case createMeeting, createChat, open(Meeting) }
-    private var visibleMeetings: [Meeting] {
-        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        return app.conversation.savedMeetings.filter { query.isEmpty || $0.title.localizedStandardContains(query) }
-    }
+    private var visibleMeetings: [Meeting] { app.conversation.savedMeetings }
     var body: some View {
         @Bindable var conversation = app.conversation
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                HStack {
-                    HMSectionHeader(title: "Список встреч", subtitle: "Всего встреч: \(conversation.savedMeetings.count)")
-                    Spacer()
-                    Picker("Профиль", selection: $app.profile) { ForEach(ProfileID.allCases) { Text($0.title).tag($0) } }.frame(width: 210)
-                }
+                HMSectionHeader(title: "Список встреч", subtitle: "Всего встреч: \(conversation.savedMeetings.count)")
                 HMPanel {
                     HStack(spacing: 12) {
                         TextField("Название встречи, например: Собеседование в Ozon", text: $conversation.newMeetingTitle)
                             .textFieldStyle(.plain).padding(10)
                             .background(DesignTokens.elevated, in: RoundedRectangle(cornerRadius: 8))
                             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(DesignTokens.inputBorder))
-                        Toggle("Указать информацию о вакансии", isOn: $includeVacancy)
-                        Toggle("Сохранять на Mac", isOn: $conversation.saveNewMeetingHistory)
+                        Button("Указать информацию о вакансии", systemImage: "briefcase") { includeVacancy.toggle() }
+                            .buttonStyle(.bordered)
                         Button("Создать", systemImage: "plus") { navigate(.createMeeting) }
                             .buttonStyle(HMPrimaryButtonStyle()).disabled(conversation.isLoading)
                     }
@@ -42,11 +34,9 @@ struct MeetingsView: View {
                     }
                 }
                 HStack {
-                    HStack { Image(systemName: "magnifyingglass").foregroundStyle(.secondary); TextField("Поиск встречи", text: $search).textFieldStyle(.plain) }
-                        .padding(9).background(DesignTokens.elevated, in: RoundedRectangle(cornerRadius: 8)).frame(maxWidth: 360)
+                    Text("Группировать").font(.headline)
                     Spacer()
                     Picker("Группировать", selection: .constant("По дате")) { Text("По дате"); Text("По компании") }.frame(width: 150)
-                    Button("Обновить", systemImage: "arrow.clockwise") { Task { await conversation.loadLibrary() } }
                 }
                 if visibleMeetings.isEmpty {
                     HMPanel {

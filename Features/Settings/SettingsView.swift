@@ -31,19 +31,29 @@ struct SettingsView: View {
     @State private var proxyURL = ""
     @State private var disguiseName = "HireMate"
     @State private var disguiseIcon = "briefcase.fill"
+    @State private var settingsSearch = ""
 
     var body: some View {
         HStack(spacing: 0) {
             settingsSidebar
             Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    HMSectionHeader(title: pane.title, subtitle: pane.subtitle)
-                    settingsPage
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                    TextField("Поиск по названию…", text: $settingsSearch).textFieldStyle(.plain)
                 }
-                .padding(22)
-                .frame(maxWidth: 980, alignment: .topLeading)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(.horizontal, 12).frame(height: 38)
+                .background(DesignTokens.elevated, in: RoundedRectangle(cornerRadius: 9))
+                .padding(16)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        HMSectionHeader(title: pane.title, subtitle: pane.subtitle)
+                        settingsPage
+                    }
+                    .padding(.horizontal, 22).padding(.bottom, 22)
+                    .frame(maxWidth: 980, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                }
             }
             .background(DesignTokens.canvas)
         }

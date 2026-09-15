@@ -63,34 +63,29 @@ struct TrackerView: View {
     @State private var showStats = false
     @State private var showCompare = false
     @State private var showPreferences = false
-    @State private var search = ""
-
-    private var visibleVacancies: [Vacancy] {
-        let value = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty else { return app.tracker.vacancies }
-        return app.tracker.vacancies.filter { $0.company.localizedCaseInsensitiveContains(value) || $0.title.localizedCaseInsensitiveContains(value) }
-    }
+    private var visibleVacancies: [Vacancy] { app.tracker.vacancies }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Трекер собеседований").font(.largeTitle.bold())
-                Text("\(app.tracker.vacancies.count) активных вакансий · данные хранятся локально").foregroundStyle(.secondary)
-            }
+        VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
-                Label("Доска", systemImage: "rectangle.3.group").font(.callout.weight(.semibold)).foregroundStyle(DesignTokens.accent)
+                Text("Трекер собеседований").font(.title2.bold())
+                HStack(spacing: 0) {
+                    Label("Доска", systemImage: "rectangle.3.group")
+                        .foregroundStyle(DesignTokens.accent)
+                        .padding(.horizontal, 12).frame(height: 34)
+                        .background(DesignTokens.accentSoft)
+                    Button("Статистика", systemImage: "chart.bar") { showStats = true }
+                        .buttonStyle(.plain).padding(.horizontal, 12).frame(height: 34)
+                }
+                .font(.callout.weight(.semibold))
+                .clipShape(RoundedRectangle(cornerRadius: 9))
+                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(DesignTokens.hairline))
                 Spacer()
-                Button("Статистика", systemImage: "chart.bar") { showStats = true }
+                Button("Добавить колонку", systemImage: "plus") { showNewStage = true }.buttonStyle(HMPrimaryButtonStyle())
                 Button("Сравнить", systemImage: "arrow.left.arrow.right") { showCompare = true }
                 Button("Архив \(archivedCount)", systemImage: "archivebox") { showArchive = true }
-                Button { showPreferences = true } label: { Image(systemName: "gearshape") }.help("Настройки трекера")
-                Button("Добавить колонку", systemImage: "rectangle.badge.plus") { showNewStage = true }
-                Button("Добавить вакансию", systemImage: "plus") { showNewVacancy = true }.buttonStyle(HMPrimaryButtonStyle())
+                Button { showPreferences = true } label: { Image(systemName: "slider.horizontal.3") }.help("Настройки трекера")
             }
-            HStack {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Поиск компании или должности", text: $search).textFieldStyle(.plain)
-            }.padding(10).background(DesignTokens.card, in: RoundedRectangle(cornerRadius: 10))
             if app.tracker.isLoading { ProgressView("Загружаем доску…") }
             ScrollView(.horizontal) {
                 HStack(alignment: .top, spacing: 14) {
@@ -100,6 +95,7 @@ struct TrackerView: View {
             if let message = app.tracker.message.isEmpty ? nil : app.tracker.message { Text(message).font(.caption).foregroundStyle(.orange) }
         }
         .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(DesignTokens.canvas)
         .task { await app.tracker.load() }
         .sheet(isPresented: $showNewStage) { NewStageForm { name in Task { await app.tracker.addStage(name) } } }
@@ -125,6 +121,7 @@ struct TrackerView: View {
             Button("Добавить вакансию") { showNewVacancy = true }.buttonStyle(.borderless).foregroundStyle(DesignTokens.accent)
         }
         .padding(14).frame(width: 280, alignment: .topLeading)
+        .frame(minHeight: 540, alignment: .topLeading)
         .background(DesignTokens.card.opacity(0.88), in: RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(DesignTokens.hairline))
         .dropDestination(for: String.self) { items, _ in

@@ -13,11 +13,11 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .screenshot: "camera.viewfinder"
         case .transcription: "text.bubble"
         case .audio: "waveform"
-        case .home: "sun.max"
-        case .meetings: "bubble.left.and.bubble.right"
-        case .contexts: "rectangle.stack"
-        case .notes: "note.text"
-        case .practice: "figure.mind.and.body"
+        case .home: "house"
+        case .meetings: "clock.arrow.circlepath"
+        case .contexts: "sparkles"
+        case .notes: "doc.text"
+        case .practice: "rectangle.stack"
         case .analysis: "chart.bar.doc.horizontal"
         case .resume: "doc.text"
         case .vacancies: "briefcase"
@@ -42,20 +42,21 @@ enum AppSection: String, CaseIterable, Identifiable {
 struct AppShell: View {
     @Bindable var model: AppModel
     @Environment(\.openWindow) private var openWindow
-    @State private var selection: AppSection = .home
+    @State private var selection: AppSection = .meetings
     @State private var search = ""
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
+        VStack(spacing: 0) {
+            topBar
             Divider()
-            VStack(spacing: 0) {
-                topBar
+            HStack(spacing: 0) {
+                sidebar
                 Divider()
                 detail
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .background(DesignTokens.canvas)
+        .ignoresSafeArea(.container, edges: .top)
         .tint(DesignTokens.accent)
         .onAppear {
             let opener = openWindow
@@ -73,85 +74,58 @@ struct AppShell: View {
     }
 
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 9).fill(DesignTokens.accent)
-                    Image(systemName: "person.crop.square.filled.and.at.rectangle")
-                        .foregroundStyle(.white).font(.title3)
-                }.frame(width: 36, height: 36)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("HireMate").font(.headline)
-                    Text("Личный помощник").font(.caption2).foregroundStyle(.secondary)
+        VStack(spacing: 8) {
+            VStack(spacing: 7) {
+                ForEach([AppSection.meetings, .vacancies, .contexts, .notes, .practice]) { section in
+                    navigationButton(section)
                 }
-            }.padding(.horizontal, 16).padding(.vertical, 14)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 3) {
-                    sidebarGroup("Работа", sections: [.home, .meetings, .contexts, .notes])
-                    sidebarGroup("Развитие", sections: [.practice, .analysis, .resume, .vacancies])
-                    sidebarGroup("Инструменты", sections: [.audio, .transcription, .screenshot, .actions])
-                    sidebarGroup("Приложение", sections: [.settings, .diagnostics])
-                }.padding(.horizontal, 9).padding(.bottom, 12)
             }
-
-            Divider()
-            VStack(alignment: .leading, spacing: 5) {
-                HStack {
-                    Circle().fill(DesignTokens.accentSoft).frame(width: 30, height: 30)
-                        .overlay(Text("ММ").font(.caption2.bold()).foregroundStyle(DesignTokens.accent))
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Максим Машевский").font(.caption.weight(.semibold))
-                        Text("Go Backend · Intern / Junior").font(.caption2).foregroundStyle(.secondary)
-                    }
-                }
-                Label(model.providerSettings.configuration.mode == .demo ? "Демо без сети" : "Собственный API",
-                      systemImage: model.providerSettings.configuration.mode == .demo ? "network.slash" : "network")
-                    .font(.caption2).foregroundStyle(DesignTokens.accent)
-            }.padding(14)
+            Spacer(minLength: 16)
+            navigationButton(.diagnostics)
+            navigationButton(.settings)
         }
-        .frame(width: 224)
+        .padding(.vertical, 9)
+        .frame(width: 58)
         .background(DesignTokens.sidebar)
     }
 
-    private func sidebarGroup(_ title: String, sections: [AppSection]) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title.uppercased()).font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.tertiary).padding(.horizontal, 9).padding(.top, 12).padding(.bottom, 4)
-            ForEach(sections) { section in
-                Button {
-                    selection = section
-                } label: {
-                    Label(section.rawValue, systemImage: section.symbol)
-                        .font(.system(size: 13, weight: selection == section ? .semibold : .regular))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 10).padding(.vertical, 7)
-                        .background(selection == section ? DesignTokens.accentSoft : .clear,
-                                    in: RoundedRectangle(cornerRadius: 8))
-                        .foregroundStyle(selection == section ? DesignTokens.accent : .primary)
-                }.buttonStyle(.plain)
-            }
+    private func navigationButton(_ section: AppSection) -> some View {
+        Button { selection = section } label: {
+            Image(systemName: section.symbol)
+                .font(.system(size: 17, weight: .semibold))
+                .frame(width: 38, height: 38)
+                .foregroundStyle(selection == section ? DesignTokens.accent : .primary)
+                .background(selection == section ? DesignTokens.accentSoft : .clear,
+                            in: RoundedRectangle(cornerRadius: 10))
+                .overlay {
+                    if selection == section {
+                        RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder(DesignTokens.accent.opacity(0.65), lineWidth: 1)
+                    }
+                }
+                .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .help(section.rawValue)
     }
 
     private var topBar: some View {
-        HStack(spacing: 12) {
+        ZStack {
             HStack(spacing: 7) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                Image(systemName: "magnifyingglass").foregroundStyle(.primary)
                 TextField("Поиск…", text: $search).textFieldStyle(.plain)
             }
-            .padding(.horizontal, 11).frame(width: 320, height: 34)
+            .padding(.horizontal, 11).frame(width: 360, height: 31)
             .background(DesignTokens.elevated, in: RoundedRectangle(cornerRadius: 8))
-            Spacer()
-            HMStatusPill(text: model.audio.isRunning ? "Звук включён" : "Готов", color: model.audio.isRunning ? .red : DesignTokens.success)
-            Button("Окно встречи", systemImage: "rectangle.on.rectangle") { model.overlay.toggle() }
-                .buttonStyle(.bordered)
-            Button("Обновить", systemImage: "arrow.clockwise") { model.refreshPermissions() }
-                .buttonStyle(HMPrimaryButtonStyle())
-            Circle().fill(DesignTokens.accent).frame(width: 30, height: 30)
-                .overlay(Text("М").font(.caption.bold()).foregroundStyle(.white))
+            HStack(spacing: 10) {
+                Spacer()
+                Button("Продолжить", systemImage: "play.fill") { model.overlay.toggle() }
+                    .buttonStyle(HMTopBarButtonStyle(accented: false))
+                Circle().fill(DesignTokens.accent.opacity(0.22)).frame(width: 30, height: 30)
+                    .overlay(Text("ММ").font(.system(size: 10, weight: .bold)).foregroundStyle(DesignTokens.accent))
+            }
         }
-        .padding(.horizontal, 18).frame(height: 56)
+        .padding(.leading, 80).padding(.trailing, 12).frame(height: 44)
         .background(DesignTokens.sidebar)
     }
 
@@ -172,6 +146,21 @@ struct AppShell: View {
         case .analysis: AnalysisDashboard()
         case .resume: ResumeDashboard()
         }
+    }
+}
+
+private struct HMTopBarButtonStyle: ButtonStyle {
+    let accented: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(accented ? DesignTokens.accent : Color.primary)
+            .padding(.horizontal, 11).frame(height: 29)
+            .background(accented ? DesignTokens.accentSoft : DesignTokens.elevated,
+                        in: RoundedRectangle(cornerRadius: 9))
+            .overlay(RoundedRectangle(cornerRadius: 9)
+                .strokeBorder(accented ? DesignTokens.accent.opacity(0.7) : DesignTokens.hairline))
+            .opacity(configuration.isPressed ? 0.72 : 1)
     }
 }
 
