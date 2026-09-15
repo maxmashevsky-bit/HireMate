@@ -7,9 +7,9 @@ struct MaxInterviewCopilotApp: App {
     @NSApplicationDelegateAdaptor(AppLifecycle.self) private var lifecycle
     @State private var model = AppModel()
     var body: some Scene {
-        WindowGroup("Max Interview Copilot", id: "main") {
+        WindowGroup("HireMate", id: "main") {
             AppShell(model: model)
-                .frame(minWidth: 920, minHeight: 660)
+                .frame(minWidth: 1040, minHeight: 700)
                 .preferredColorScheme(model.theme == .system ? nil : (model.theme == .dark ? .dark : .light))
                 .tint(DesignTokens.accent)
                 .onAppear {
@@ -17,14 +17,14 @@ struct MaxInterviewCopilotApp: App {
                     lifecycle.model = model
                 }
         }
-        .defaultSize(width: 1120, height: 780)
+        .defaultSize(width: 1240, height: 820)
         .commands {
             CommandGroup(after: .help) {
                 Button("Открыть знакомство с приложением") { model.showOnboarding = true }
             }
         }
-        Settings { SettingsView(model: model).frame(width: 620, height: 610) }
-        MenuBarExtra("Max Interview Copilot", systemImage: "bubble.left.and.text.bubble.right") {
+        Settings { SettingsView(model: model).frame(width: 1120, height: 760) }
+        MenuBarExtra("HireMate", systemImage: "bubble.left.and.text.bubble.right") {
             MenuContent(model: model)
         }
     }

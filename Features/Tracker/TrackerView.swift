@@ -61,6 +61,8 @@ struct TrackerView: View {
     @State private var showNewVacancy = false
     @State private var showArchive = false
     @State private var showStats = false
+    @State private var showCompare = false
+    @State private var showPreferences = false
     @State private var search = ""
 
     private var visibleVacancies: [Vacancy] {
@@ -70,17 +72,20 @@ struct TrackerView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Трекер собеседований").font(.largeTitle.bold())
-                    Text("\(app.tracker.vacancies.count) активных вакансий · данные хранятся локально").foregroundStyle(.secondary)
-                }
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Трекер собеседований").font(.largeTitle.bold())
+                Text("\(app.tracker.vacancies.count) активных вакансий · данные хранятся локально").foregroundStyle(.secondary)
+            }
+            HStack(spacing: 10) {
+                Label("Доска", systemImage: "rectangle.3.group").font(.callout.weight(.semibold)).foregroundStyle(DesignTokens.accent)
                 Spacer()
-                Button("Архив \(archivedCount)", systemImage: "archivebox") { showArchive = true }
                 Button("Статистика", systemImage: "chart.bar") { showStats = true }
-                Button("Новая колонка", systemImage: "rectangle.badge.plus") { showNewStage = true }
-                Button("Добавить вакансию", systemImage: "plus") { showNewVacancy = true }
+                Button("Сравнить", systemImage: "arrow.left.arrow.right") { showCompare = true }
+                Button("Архив \(archivedCount)", systemImage: "archivebox") { showArchive = true }
+                Button { showPreferences = true } label: { Image(systemName: "gearshape") }.help("Настройки трекера")
+                Button("Добавить колонку", systemImage: "rectangle.badge.plus") { showNewStage = true }
+                Button("Добавить вакансию", systemImage: "plus") { showNewVacancy = true }.buttonStyle(HMPrimaryButtonStyle())
             }
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -95,11 +100,14 @@ struct TrackerView: View {
             if let message = app.tracker.message.isEmpty ? nil : app.tracker.message { Text(message).font(.caption).foregroundStyle(.orange) }
         }
         .padding(24)
+        .background(DesignTokens.canvas)
         .task { await app.tracker.load() }
         .sheet(isPresented: $showNewStage) { NewStageForm { name in Task { await app.tracker.addStage(name) } } }
         .sheet(isPresented: $showNewVacancy) { NewVacancyForm(stages: app.tracker.stages) { vacancy in Task { await app.tracker.save(vacancy) } } }
         .sheet(isPresented: $showArchive) { ArchiveView(app: app) }
         .sheet(isPresented: $showStats) { TrackerStatsView(app: app) }
+        .sheet(isPresented: $showCompare) { OfferComparisonView(app: app) }
+        .sheet(isPresented: $showPreferences) { TrackerPreferencesView() }
     }
 
     private var archivedCount: Int { app.tracker.archivedVacancies.count }
@@ -117,7 +125,8 @@ struct TrackerView: View {
             Button("Добавить вакансию") { showNewVacancy = true }.buttonStyle(.borderless).foregroundStyle(DesignTokens.accent)
         }
         .padding(14).frame(width: 280, alignment: .topLeading)
-        .background(DesignTokens.card.opacity(0.7), in: RoundedRectangle(cornerRadius: 14))
+        .background(DesignTokens.card.opacity(0.88), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(DesignTokens.hairline))
         .dropDestination(for: String.self) { items, _ in
             guard let id = items.first, let vacancy = app.tracker.vacancies.first(where: { $0.id.uuidString == id }) else { return false }
             Task { await app.tracker.move(vacancy, to: stage) }; return true
@@ -135,7 +144,8 @@ private struct VacancyCard: View {
             Text(vacancy.title)
             if !vacancy.grade.isEmpty || !vacancy.workFormat.isEmpty { Text([vacancy.grade, vacancy.workFormat].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary) }
             if !vacancy.salary.isEmpty { Text(vacancy.salary).font(.caption).foregroundStyle(DesignTokens.accent) }
-        }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.background.opacity(0.55), in: RoundedRectangle(cornerRadius: 10))
+        }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(DesignTokens.elevated, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(DesignTokens.hairline))
     }
 }
 
@@ -176,6 +186,84 @@ private struct ArchiveView: View {
 private struct TrackerStatsView: View {
     @Bindable var app: AppModel
     @Environment(\.dismiss) private var dismiss
-    var body: some View { VStack(alignment: .leading, spacing: 16) { HStack { Text("Статистика трекера").font(.title2.bold()); Spacer(); Button { dismiss() } label: { Image(systemName: "xmark") }.buttonStyle(.borderless) }; HStack { metric("Активные", app.tracker.vacancies.count); metric("Всего этапов", app.tracker.stages.count); metric("Переходы", app.tracker.transitions.count) }; Divider(); Text("Воронка по этапам").font(.headline); ForEach(app.tracker.stages) { stage in HStack { Text(stage.name); Spacer(); Text("\(app.tracker.vacancies.filter { $0.stageID == stage.id }.count)").foregroundStyle(.secondary) } } }.padding(24).frame(width: 500) }
-    private func metric(_ title: String, _ value: Int) -> some View { VStack(alignment: .leading) { Text("\(value)").font(.title.bold()); Text(title).font(.caption).foregroundStyle(.secondary) }.frame(maxWidth: .infinity, alignment: .leading) }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack { Text("Статистика трекера").font(.title2.bold()); Spacer(); Button { dismiss() } label: { Image(systemName: "xmark") }.buttonStyle(.borderless) }
+            HStack(spacing: 12) {
+                metric("Активные", app.tracker.vacancies.count, "briefcase")
+                metric("В архиве", app.tracker.archivedVacancies.count, "archivebox")
+                metric("Всего", app.tracker.vacancies.count + app.tracker.archivedVacancies.count, "number")
+                metric("Встречи", app.tracker.transitions.count, "bolt")
+            }
+            HStack(alignment: .top, spacing: 14) {
+                HMPanel("Воронка") {
+                    ForEach(app.tracker.stages) { stage in
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack { Text(stage.name); Spacer(); Text("\(app.tracker.vacancies.filter { $0.stageID == stage.id }.count)").foregroundStyle(.secondary) }
+                            ProgressView(value: Double(app.tracker.vacancies.filter { $0.stageID == stage.id }.count), total: Double(max(1, app.tracker.vacancies.count))).tint(DesignTokens.accent)
+                        }
+                    }
+                }
+                HMPanel("Среднее время на этапе") { Text(app.tracker.transitions.isEmpty ? "Пока нет завершённых переходов между этапами." : "Данные рассчитаны по локальной истории переходов.").foregroundStyle(.secondary) }.frame(width: 270)
+            }
+            HStack { Spacer(); Button("Экспортировать PDF", systemImage: "doc.richtext") {}; Button("Закрыть") { dismiss() }.buttonStyle(HMPrimaryButtonStyle()) }
+        }.padding(24).frame(width: 820, height: 590).background(DesignTokens.canvas)
+    }
+    private func metric(_ title: String, _ value: Int, _ icon: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) { Image(systemName: icon).foregroundStyle(DesignTokens.accent); Text("\(value)").font(.title.bold()); Text(title).font(.caption).foregroundStyle(.secondary) }
+            .padding(14).frame(maxWidth: .infinity, alignment: .leading).background(DesignTokens.card, in: RoundedRectangle(cornerRadius: 11)).overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(DesignTokens.hairline))
+    }
+}
+
+@MainActor
+private struct OfferComparisonView: View {
+    @Bindable var app: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var firstID: UUID?
+    @State private var secondID: UUID?
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack { Text("Сравнение офферов").font(.title2.bold()); Spacer(); Button { dismiss() } label: { Image(systemName: "xmark") }.buttonStyle(.borderless) }
+            HStack {
+                Picker("Первый оффер", selection: $firstID) { Text("Выберите вакансию").tag(UUID?.none); ForEach(app.tracker.vacancies) { Text("\($0.company) · \($0.title)").tag(Optional($0.id)) } }
+                Picker("Второй оффер", selection: $secondID) { Text("Выберите вакансию").tag(UUID?.none); ForEach(app.tracker.vacancies) { Text("\($0.company) · \($0.title)").tag(Optional($0.id)) } }
+            }
+            HMPanel {
+                if firstID == nil || secondID == nil {
+                    ContentUnavailableView("Выберите два оффера", systemImage: "arrow.left.arrow.right", description: Text("Заполните вилку, грейд и формат хотя бы у двух карточек, чтобы сравнить."))
+                } else {
+                    comparisonRow("Компания", value: { $0.company })
+                    comparisonRow("Позиция", value: { $0.title })
+                    comparisonRow("Вилка", value: { $0.salary })
+                    comparisonRow("Грейд", value: { $0.grade })
+                    comparisonRow("Формат", value: { $0.workFormat })
+                }
+            }
+            Spacer(); HStack { Spacer(); Button("Закрыть") { dismiss() }.buttonStyle(HMPrimaryButtonStyle()) }
+        }.padding(24).frame(width: 760, height: 480).background(DesignTokens.canvas)
+    }
+    @ViewBuilder private func comparisonRow(_ title: String, value: (Vacancy) -> String) -> some View {
+        let first = app.tracker.vacancies.first { $0.id == firstID }
+        let second = app.tracker.vacancies.first { $0.id == secondID }
+        HStack { Text(title).frame(width: 90, alignment: .leading); Divider(); Text(first.map(value) ?? "—").frame(maxWidth: .infinity); Divider(); Text(second.map(value) ?? "—").frame(maxWidth: .infinity) }.frame(height: 34)
+    }
+}
+
+private struct TrackerPreferencesView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var reminders = true
+    @State private var days = 7
+    @State private var telegram = ""
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack { Text("Настройки трекера").font(.title2.bold()); Spacer(); Button { dismiss() } label: { Image(systemName: "xmark") }.buttonStyle(.borderless) }
+            HMPanel("Напоминания о протухших карточках") {
+                Toggle("Напоминать о карточках без активности", isOn: $reminders)
+                Stepper("Порог: \(days) дней", value: $days, in: 1...60)
+                TextField("Имя собственного Telegram-бота", text: $telegram)
+                Label("Подключение бота появится после безопасной настройки токена в Keychain.", systemImage: "paperplane").font(.caption).foregroundStyle(.secondary)
+            }
+            HStack { Spacer(); Button("Отмена") { dismiss() }; Button("Сохранить") { dismiss() }.buttonStyle(HMPrimaryButtonStyle()) }
+        }.padding(24).frame(width: 520).background(DesignTokens.canvas)
+    }
 }

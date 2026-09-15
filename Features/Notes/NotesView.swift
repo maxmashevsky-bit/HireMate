@@ -13,28 +13,45 @@ struct NotesView: View {
         @Bindable var model = app.notes
         HSplitView {
             VStack(alignment: .leading, spacing: 10) {
-                Text(app.profile.title).font(.headline)
+                HStack { Text("Заметки").font(.title3.bold()); Spacer(); Text("\(model.notes.count)").foregroundStyle(.secondary) }
+                Text(app.profile.title).font(.caption).foregroundStyle(.secondary)
                 TextField("Полнотекстовый поиск", text: $model.query).onSubmit { Task { await model.refresh() } }
                 HStack {
                     Button("Найти") { Task { await model.refresh() } }
-                    Button("Новая") { model.create() }
+                    Button("Новая заметка", systemImage: "plus") { model.create() }
                     Button("Импорт") { Task { await importNote() } }.disabled(model.hasEdits || model.isBusy)
                 }
                 Toggle("Показывать архив", isOn: $model.includeArchived)
                     .onChange(of: model.includeArchived) { _, _ in Task { await model.refresh() } }
-                List(model.notes) { note in
-                    Button { model.select(note) } label: {
-                        VStack(alignment: .leading) {
-                            Label(note.title, systemImage: note.isPinned ? "pin.fill" : "doc.text")
-                            Text(note.tags.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary)
+                List {
+                    Section("Папки") {
+                        Label("Без папки", systemImage: "folder").badge(model.notes.filter { ($0.folder ?? "").isEmpty }.count)
+                        ForEach(Array(Set(model.notes.compactMap(\.folder))).sorted(), id: \.self) { folder in
+                            Label(folder, systemImage: "folder.fill").badge(model.notes.filter { $0.folder == folder }.count)
                         }
-                    }.buttonStyle(.plain)
+                    }
+                    Section("Заметки") {
+                        ForEach(model.notes) { note in
+                            Button { model.select(note) } label: {
+                                VStack(alignment: .leading) {
+                                    Label(note.title, systemImage: note.isPinned ? "pin.fill" : "doc.text")
+                                    Text(note.tags.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }.buttonStyle(.plain)
+                        }
+                    }
                 }
                 Text("Список ограничен 500 заметками. Для точного отбора используйте поиск.").font(.caption2)
+                HStack { Button("Папка", systemImage: "folder.badge.plus") {}; Button("Файл", systemImage: "doc.badge.plus") { Task { await importNote() } } }
             }.padding().frame(minWidth: 230, idealWidth: 260, maxWidth: 340)
             VStack(alignment: .leading, spacing: 12) {
                 if let note = model.edited {
-                    TextField("Название", text: noteBinding(\.title, default: ""))
+                    HStack {
+                        TextField("Название", text: noteBinding(\.title, default: "")).font(.title2.bold())
+                        Toggle("Использовать RAG", isOn: noteBinding(\.allowAI, default: false)).toggleStyle(.switch)
+                        HMStatusPill(text: note.allowAI ? "RAG-индекс" : "Локально", color: note.allowAI ? DesignTokens.success : .secondary)
+                        Button("Загрузить файл", systemImage: "arrow.up.doc") { Task { await importNote() } }
+                    }
                     TextField("Папка", text: Binding(
                         get: { model.edited?.folder ?? "" },
                         set: { model.edited?.folder = $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
@@ -45,19 +62,23 @@ struct NotesView: View {
                         Toggle("В архив", isOn: noteBinding(\.isArchived, default: false))
                         Toggle("Предпросмотр Markdown", isOn: $showPreview)
                     }
+                    HStack(spacing: 7) {
+                        ForEach(["bold", "italic", "strikethrough", "link", "curlybraces", "list.bullet", "list.number", "quote.bubble", "tablecells"], id: \.self) { symbol in
+                            Button { } label: { Image(systemName: symbol).frame(width: 25, height: 25) }.buttonStyle(.borderless)
+                        }
+                    }.padding(6).background(DesignTokens.elevated, in: RoundedRectangle(cornerRadius: 8))
                     if showPreview {
                         ScrollView { Text(.init(note.markdown)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
                     } else {
                         TextEditor(text: noteBinding(\.markdown, default: "")).font(.system(.body, design: .monospaced))
                     }
-                    Toggle("Разрешить использование фрагментов этой заметки в AI", isOn: noteBinding(\.allowAI, default: false))
                     Text("Разрешение выключено по умолчанию. Дополнительно нужно включить поиск заметок в настройках активного контекста.").font(.caption)
                     if let path = note.sourcePath {
                         Text("Источник: \(URL(fileURLWithPath: path).lastPathComponent)").font(.caption)
                         Text("SHA-256 исходного файла: \(note.sourceHash ?? "нет")").font(.caption2).textSelection(.enabled)
                     }
                     HStack {
-                        Button("Сохранить") { model.save() }.buttonStyle(.borderedProminent).disabled(model.isBusy || !model.hasEdits)
+                        Button("Сохранить") { model.save() }.buttonStyle(HMPrimaryButtonStyle()).disabled(model.isBusy || !model.hasEdits)
                         Button("Отменить правки") { model.cancelEdits() }.disabled(model.isBusy)
                         Menu("Экспорт") {
                             Button("Только Markdown") { Task { await exportNote(note, archive: false) } }
@@ -68,8 +89,8 @@ struct NotesView: View {
                     }
                 } else { ContentUnavailableView("Выберите или создайте заметку", systemImage: "note.text") }
                 Text(model.status).font(.caption).foregroundStyle(.secondary)
-            }.padding().frame(minWidth: 460)
-        }.navigationTitle("Заметки").task { await model.refresh() }
+            }.padding().frame(minWidth: 460).background(DesignTokens.canvas)
+        }.background(DesignTokens.canvas).task { await model.refresh() }
             .confirmationDialog("Удалить заметку и её поисковый индекс?", isPresented: $confirmDelete) {
                 Button("Удалить", role: .destructive) { Task { await model.deleteSelected() } }
             }

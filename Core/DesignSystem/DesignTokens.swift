@@ -2,13 +2,17 @@ import SwiftUI
 
 enum DesignTokens {
     static let spacing: CGFloat = 20
-    static let cornerRadius: CGFloat = 14
-    static let contentWidth: CGFloat = 1180
-    static let accent = Color(red: 0, green: 0.78, blue: 0.83)
-    static let canvas = adaptive(dark: 0x292627, light: 0xF5F5F7)
-    static let sidebar = adaptive(dark: 0x302E2F, light: 0xECECEE)
-    static let card = adaptive(dark: 0x1E1E1E, light: 0xFFFFFF)
-    static let inputBorder = adaptive(dark: 0x444444, light: 0xC9C9CD)
+    static let cornerRadius: CGFloat = 13
+    static let contentWidth: CGFloat = 1320
+    static let accent = Color(red: 1.00, green: 0.52, blue: 0.04)
+    static let accentSoft = Color(red: 1.00, green: 0.52, blue: 0.04).opacity(0.16)
+    static let success = Color(red: 0.22, green: 0.82, blue: 0.55)
+    static let canvas = adaptive(dark: 0x121615, light: 0xF3F5F3)
+    static let sidebar = adaptive(dark: 0x191E1C, light: 0xE9EDE9)
+    static let card = adaptive(dark: 0x202624, light: 0xFFFFFF)
+    static let elevated = adaptive(dark: 0x29302D, light: 0xF7F9F7)
+    static let inputBorder = adaptive(dark: 0x3A4541, light: 0xC9D0CB)
+    static let hairline = adaptive(dark: 0x313936, light: 0xDDE2DE)
 
     private static func adaptive(dark: UInt32, light: UInt32) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in
@@ -27,5 +31,69 @@ struct InfoCard<Content: View>: View {
             .padding(DesignTokens.spacing)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(DesignTokens.card, in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius))
+            .overlay(RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
+                .strokeBorder(DesignTokens.hairline, lineWidth: 1))
+    }
+}
+
+struct HMPanel<Content: View>: View {
+    var title: String?
+    var subtitle: String?
+    @ViewBuilder var content: Content
+
+    init(_ title: String? = nil, subtitle: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.subtitle = subtitle
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if let title {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).font(.headline)
+                    if let subtitle { Text(subtitle).font(.caption).foregroundStyle(.secondary) }
+                }
+            }
+            content
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(DesignTokens.card, in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius))
+        .overlay(RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
+            .strokeBorder(DesignTokens.hairline, lineWidth: 1))
+    }
+}
+
+struct HMSectionHeader: View {
+    let title: String
+    var subtitle: String?
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(.system(size: 25, weight: .bold))
+            if let subtitle { Text(subtitle).foregroundStyle(.secondary) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct HMStatusPill: View {
+    let text: String
+    var color: Color = DesignTokens.success
+    var body: some View {
+        Text(text).font(.caption.weight(.semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background(color.opacity(0.13), in: Capsule())
+    }
+}
+
+struct HMPrimaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            .background(DesignTokens.accent.opacity(configuration.isPressed ? 0.72 : 1), in: RoundedRectangle(cornerRadius: 8))
     }
 }

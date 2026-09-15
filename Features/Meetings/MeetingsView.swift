@@ -10,6 +10,7 @@ struct MeetingsView: View {
     @State private var deleteChat = false
     @State private var renamedChat = ""
     @State private var search = ""
+    @State private var includeVacancy = false
     @State private var pendingNavigation: Navigation?
     private enum Navigation { case createMeeting, createChat, open(Meeting) }
     private var visibleMeetings: [Meeting] {
@@ -18,100 +19,51 @@ struct MeetingsView: View {
     }
     var body: some View {
         @Bindable var conversation = app.conversation
-        HSplitView {
-            VStack(alignment: .leading, spacing: 12) {
-                Text(app.profile.title).font(.headline)
-                TextField("Название встречи", text: $conversation.newMeetingTitle)
-                Toggle("Сохранять историю на Mac", isOn: $conversation.saveNewMeetingHistory)
-                Button("Создать встречу") { navigate(.createMeeting) }.disabled(conversation.isLoading)
-                Divider()
-                Text("Сохранённые встречи").font(.subheadline.bold())
-                TextField("Поиск по названию", text: $search).textFieldStyle(.roundedBorder)
-                Text("Найдено: \(visibleMeetings.count)").font(.caption).foregroundStyle(.secondary)
-                List(visibleMeetings) { meeting in
-                    HStack {
-                        Button(meeting.title) { navigate(.open(meeting)) }.buttonStyle(.plain)
-                        Spacer()
-                        Button { deletion = meeting } label: { Image(systemName: "trash") }.buttonStyle(.plain)
-                    }
-                }.disabled(conversation.isLoading)
-                Button("Обновить список") { Task { await conversation.loadLibrary() } }
-            }.padding().frame(minWidth: 220, idealWidth: 250, maxWidth: 300)
-            VStack(alignment: .leading, spacing: 12) {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
                 HStack {
-                    Text(conversation.meeting.title).font(.title2.bold())
+                    HMSectionHeader(title: "Список встреч", subtitle: "Всего встреч: \(conversation.savedMeetings.count)")
                     Spacer()
-                    Label(conversation.meeting.isEphemeral ? "В памяти" : "На Mac", systemImage: conversation.meeting.isEphemeral ? "memorychip" : "internaldrive")
-                        .font(.caption)
-                    Menu("Экспорт") {
-                        Button("Markdown · читаемый текст") { Task { await export(markdown: true) } }
-                        Button("JSON · структурированные данные") { Task { await export(markdown: false) } }
-                    }.disabled(conversation.isGenerating || conversation.isLoading)
+                    Picker("Профиль", selection: $app.profile) { ForEach(ProfileID.allCases) { Text($0.title).tag($0) } }.frame(width: 210)
                 }
-                ScrollView(.horizontal) {
-                    HStack {
-                        ForEach(conversation.chats) { chat in
-                            Button(chat.title) { conversation.requestSwitch(chat.id) }
-                                .buttonStyle(.bordered).tint(chat.id == conversation.activeChatID ? DesignTokens.accent : .secondary)
-                        }
+                HMPanel {
+                    HStack(spacing: 12) {
+                        TextField("Название встречи, например: Собеседование в Ozon", text: $conversation.newMeetingTitle)
+                            .textFieldStyle(.plain).padding(10)
+                            .background(DesignTokens.elevated, in: RoundedRectangle(cornerRadius: 8))
+                            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(DesignTokens.inputBorder))
+                        Toggle("Указать информацию о вакансии", isOn: $includeVacancy)
+                        Toggle("Сохранять на Mac", isOn: $conversation.saveNewMeetingHistory)
+                        Button("Создать", systemImage: "plus") { navigate(.createMeeting) }
+                            .buttonStyle(HMPrimaryButtonStyle()).disabled(conversation.isLoading)
+                    }
+                    if includeVacancy {
+                        HStack { TextField("Компания", text: .constant("")); TextField("Вакансия", text: .constant("")); TextField("Этап", text: .constant("")) }
                     }
                 }
                 HStack {
-                    TextField("Новый поддиалог", text: $conversation.newChatTitle)
-                    Button("Создать") { navigate(.createChat) }
-                    Button("Удалить текущий", role: .destructive) { deleteChat = true }.disabled(conversation.chats.count < 2)
-                }.disabled(conversation.isLoading)
-                HStack {
-                    TextField("Новое название текущего поддиалога", text: $renamedChat)
-                    Button("Переименовать") { Task { await conversation.renameActiveChat(renamedChat) } }
-                }
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 14) {
-                        if conversation.hiddenMessageCount > 0 || conversation.clippedMessageCount > 0 {
-                            Label("Окно ограничено: скрыто \(conversation.hiddenMessageCount), сокращено \(conversation.clippedMessageCount). " +
-                                  (conversation.meeting.isEphemeral ? "Экспорт разговора в памяти содержит видимую часть." : "Полная история остаётся в SQLite и входит в экспорт."),
-                                  systemImage: "tray.full")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        ForEach(conversation.messages) { message in
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack {
-                                    Text(message.role == .user ? "Вы" : (message.isDemo ? "Демонстрационный образец" : "Ответ AI")).font(.caption.bold())
-                                    if message.state != .complete { Text(message.state == .cancelled ? "Остановлено" : "Не завершено").font(.caption).foregroundStyle(.secondary) }
-                                }
-                                AnswerTextView(text: message.content)
-                            }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                                .background(DesignTokens.card, in: RoundedRectangle(cornerRadius: 10))
-                        }
-                        if conversation.isGenerating { AnswerTextView(text: conversation.streamingText.isEmpty ? "Ожидание ответа…" : conversation.streamingText) }
-                    }
-                }
-                if app.providerSettings.configuration.mode == .remote {
-                    Toggle("Разрешаю отправить вопрос, подтверждённые факты и историю этого поддиалога в API", isOn: $conversation.remoteConsent)
-                    Text(app.providerSettings.configuration.baseURL).font(.caption).foregroundStyle(.secondary)
-                }
-                RetrievalSourcesView(app: app)
-                ContextUsageView(conversation: conversation)
-                AttachmentPreview(conversation: conversation)
-                TextEditor(text: $conversation.draft).frame(height: 80).border(.secondary.opacity(0.3))
-                HStack {
-                    Button(app.providerSettings.configuration.mode == .demo ? "Показать образец" : "Отправить в API") { app.send() }
-                        .buttonStyle(.borderedProminent).disabled((conversation.isGenerating || conversation.isLoading) || !InputValidation.canSend(conversation.draft))
-                    Button("Остановить") { app.stop() }.disabled(!conversation.isGenerating && !conversation.isLoading)
+                    HStack { Image(systemName: "magnifyingglass").foregroundStyle(.secondary); TextField("Поиск встречи", text: $search).textFieldStyle(.plain) }
+                        .padding(9).background(DesignTokens.elevated, in: RoundedRectangle(cornerRadius: 8)).frame(maxWidth: 360)
                     Spacer()
+                    Picker("Группировать", selection: .constant("По дате")) { Text("По дате"); Text("По компании") }.frame(width: 150)
+                    Button("Обновить", systemImage: "arrow.clockwise") { Task { await conversation.loadLibrary() } }
                 }
-                SpeechControls(app: app)
-                Text(conversation.status).font(.caption).foregroundStyle(.secondary)
-                if conversation.unsavedMessageCount > 0 {
-                    HStack {
-                        Text("Сообщений без записи на диск: \(conversation.unsavedMessageCount)").foregroundStyle(.orange)
-                        Button("Повторить сохранение") { Task { await conversation.retryUnsavedMessages() } }
-                            .disabled(conversation.isSavingMessages)
-                    }.font(.caption)
+                if visibleMeetings.isEmpty {
+                    HMPanel {
+                        ContentUnavailableView("Встреч пока нет", systemImage: "bubble.left.and.bubble.right", description: Text("Введите название и создайте первую встречу."))
+                            .frame(maxWidth: .infinity, minHeight: 240)
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Сегодня").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        ForEach(visibleMeetings) { meeting in
+                            meetingRow(meeting)
+                        }
+                    }
                 }
-            }.padding().frame(minWidth: 500)
-        }
-        .navigationTitle("Встречи")
+            }.padding(24).frame(maxWidth: DesignTokens.contentWidth)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+        }.background(DesignTokens.canvas)
         .task { await conversation.loadLibrary() }
         .confirmationDialog("Продолжить? Незавершённый ответ будет остановлен, черновик вопроса и вложение будут очищены.",
                             isPresented: Binding(get: { pendingNavigation != nil }, set: { if !$0 { pendingNavigation = nil } })) {
@@ -129,6 +81,28 @@ struct MeetingsView: View {
         .confirmationDialog("Несохранённый вопрос будет очищен. Переключить поддиалог?", isPresented: Binding(get: { conversation.pendingChatID != nil }, set: { if !$0 { conversation.pendingChatID = nil } })) {
             Button("Переключить", role: .destructive) { conversation.confirmSwitch() }
         }
+    }
+
+    private func meetingRow(_ meeting: Meeting) -> some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(meeting.title).font(.headline)
+                Text("Вакансия не указана").font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Label(meeting.updatedAt.formatted(date: .omitted, time: .shortened), systemImage: "clock").font(.caption).foregroundStyle(.secondary)
+            Label("1", systemImage: "bubble.left.and.bubble.right").font(.caption).foregroundStyle(.secondary)
+            Button { Task { await app.conversation.open(meeting); app.overlay.show() } } label: { Image(systemName: "play.fill") }
+                .buttonStyle(HMPrimaryButtonStyle()).help("Продолжить встречу")
+            Button { } label: { Image(systemName: "link") }.help("Связать с вакансией")
+            Button { app.requestedSection = .notes } label: { Image(systemName: "note.text") }.help("Открыть заметки")
+            Button { renamedChat = meeting.title } label: { Image(systemName: "pencil") }.help("Переименовать")
+            Button { deletion = meeting } label: { Image(systemName: "trash") }.help("Удалить")
+        }
+        .buttonStyle(.borderless)
+        .padding(13)
+        .background(DesignTokens.card, in: RoundedRectangle(cornerRadius: 11))
+        .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(DesignTokens.hairline))
     }
     private func navigate(_ action: Navigation) {
         guard !app.conversation.isLoading else { return }

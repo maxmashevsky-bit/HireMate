@@ -16,38 +16,72 @@ struct ContextEditorView: View {
     }
     @State private var saveMessage = ""
     var body: some View {
-        Form {
-            Section("Активный контекст") {
-                Picker("Профиль", selection: $app.profile) {
-                    ForEach(ProfileID.allCases) { Text($0.title).tag($0) }
-                }.disabled(dirty)
-                Text("Профили и их история разделены. При изменённом тексте сначала сохраните или отмените правки.").font(.caption)
-                TextField("Название", text: $edited.name)
-                TextField("Целевая роль", text: $edited.role)
-                TextField("Язык ответа", text: $edited.responseLanguage)
-                TextField("Темы и технологии через запятую", text: $technologies)
-                Toggle("Первое лицо — только по подтверждённым фактам", isOn: $edited.firstPerson)
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Контексты").font(.title3.bold()).padding(.bottom, 5)
+                ForEach(ProfileID.allCases) { profile in
+                    Button {
+                        if !dirty { app.profile = profile }
+                    } label: {
+                        HStack {
+                            Image(systemName: profile == app.profile ? "checkmark.circle.fill" : "circle")
+                            VStack(alignment: .leading, spacing: 2) { Text(profile.title).font(.callout.weight(.semibold)); Text(profile == app.profile ? "Активный" : "Отдельная история").font(.caption2).foregroundStyle(.secondary) }
+                            Spacer()
+                        }.padding(9).background(profile == app.profile ? DesignTokens.accentSoft : .clear, in: RoundedRectangle(cornerRadius: 9))
+                            .foregroundStyle(profile == app.profile ? DesignTokens.accent : .primary)
+                    }.buttonStyle(.plain)
+                }
+                Spacer()
+                Button("Новый контекст", systemImage: "plus") { saveMessage = "Пользовательские контексты будут добавлены отдельным сохранением." }
+                    .buttonStyle(HMPrimaryButtonStyle())
+            }.padding(14).frame(width: 218).background(DesignTokens.sidebar)
+            Divider()
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
+                            HMSectionHeader(title: edited.name, subtitle: "Настройка языка, формата ответа и локального контекста")
+                            Spacer()
+                            HMStatusPill(text: "Используется")
+                            Button("Копия", systemImage: "doc.on.doc") {}
+                            Button("Протестировать", systemImage: "play") { app.requestedSection = .home }
+                            Button { } label: { Image(systemName: "trash") }.help("Удалить контекст")
+                        }
+                        HMPanel("Основные параметры") {
+                            TextField("Название", text: $edited.name)
+                            TextField("Целевая роль", text: $edited.role)
+                            Picker("Язык ответа", selection: $edited.responseLanguage) { Text("Русский"); Text("English") }
+                            TextField("Темы и технологии через запятую", text: $technologies)
+                            Toggle("Первое лицо — только по подтверждённым фактам", isOn: $edited.firstPerson)
+                        }
+                        HMPanel("Контекст") {
+                            TextEditor(text: $edited.companyInfo).frame(minHeight: 95)
+                            Text("Компания, вакансия и информация, которую можно учитывать в ответах.").font(.caption).foregroundStyle(.secondary)
+                        }
+                        HMPanel("Язык и структура ответа") {
+                            TextEditor(text: $edited.answerFormat).frame(minHeight: 105)
+                        }
+                        HMPanel("Локальные заметки") {
+                            Toggle("Использовать подходящие фрагменты заметок", isOn: $edited.usesNotes)
+                            TextField("Теги заметок", text: $noteTags)
+                        }
+                        HMPanel("Дополнительные инструкции") { TextEditor(text: $edited.additionalInstructions).frame(minHeight: 85) }
+                        HMPanel("Подтверждённые факты опыта") {
+                            TextEditor(text: $facts).frame(minHeight: 100)
+                            Toggle("Подтверждаю достоверность перечисленных фактов", isOn: $factsConfirmed)
+                        }
+                    }.padding(22).frame(maxWidth: 980)
+                }
+                Divider()
+                HStack {
+                    Text(saveMessage).font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Отменить правки") { load() }
+                    Button("Сохранить") { Task { await save() } }.buttonStyle(HMPrimaryButtonStyle())
+                        .disabled(!facts.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !factsConfirmed)
+                }.padding(14).background(DesignTokens.sidebar)
             }
-            Section("Локальные заметки") {
-                Toggle("Искать подходящие фрагменты для ответа AI", isOn: $edited.usesNotes)
-                TextField("Теги заметок (пусто — все разрешённые)", text: $noteTags)
-                Text("Учитываются только заметки этого профиля с включённым AI-доступом, максимум четыре фрагмента. Архив исключён.").font(.caption)
-            }
-            Section("Формат ответа") { TextEditor(text: $edited.answerFormat).frame(minHeight: 90) }
-            Section("Компания и вакансия") { TextEditor(text: $edited.companyInfo).frame(minHeight: 70) }
-            Section("Дополнительные инструкции") { TextEditor(text: $edited.additionalInstructions).frame(minHeight: 70) }
-            Section("Подтверждённые факты опыта — один на строку") {
-                TextEditor(text: $facts).frame(minHeight: 100)
-                Toggle("Подтверждаю достоверность перечисленных фактов", isOn: $factsConfirmed)
-                Text("Навыки, Rapid, стаж и метрики не добавляются автоматически. Пустой список допустим.").font(.caption)
-            }
-            HStack {
-                Button("Сохранить контекст") { Task { await save() } }
-                    .disabled(!facts.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !factsConfirmed)
-                Button("Отменить правки") { load() }
-                Text(saveMessage).font(.caption).foregroundStyle(.secondary)
-            }
-        }.formStyle(.grouped).navigationTitle("Контексты")
+        }.background(DesignTokens.canvas)
             .task { await app.conversation.loadLibrary(); load() }
             .onChange(of: app.profile) { _, _ in load() }
             .onChange(of: facts) { _, _ in factsConfirmed = false }
