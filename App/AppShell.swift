@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import CopilotCore
 
@@ -56,6 +57,7 @@ struct AppShell: View {
             }
         }
         .background(DesignTokens.canvas)
+        .background(MainWindowCaptureProtection())
         .ignoresSafeArea(.container, edges: .top)
         .tint(DesignTokens.accent)
         .onAppear {
@@ -145,6 +147,21 @@ struct AppShell: View {
         case .practice: PracticeDashboard(model: model)
         case .analysis: AnalysisDashboard()
         case .resume: ResumeDashboard()
+        }
+    }
+}
+
+@MainActor
+private struct MainWindowCaptureProtection: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { CaptureProtectionView() }
+    func updateNSView(_ nsView: NSView, context: Context) {
+        nsView.window?.sharingType = .none
+    }
+
+    private final class CaptureProtectionView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            window?.sharingType = .none
         }
     }
 }
