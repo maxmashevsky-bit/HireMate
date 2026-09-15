@@ -45,7 +45,7 @@ struct OverlayView: View {
         }
         .disabled(controller.isCompatibilityMarkerVisible)
         .accessibilityHidden(controller.isCompatibilityMarkerVisible)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius))
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius))
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.cornerRadius))
         .overlay(RoundedRectangle(cornerRadius: DesignTokens.cornerRadius).strokeBorder(.secondary.opacity(0.25)))
         .overlay {
@@ -111,11 +111,11 @@ struct OverlayView: View {
                 Button { controller.teleprompter.toggle() } label: { Image(systemName: "text.viewfinder") }
                     .help("Показать или скрыть телесуфлёр")
                 Button { controller.openMain(.home) } label: { Image(systemName: "house") }.help("Главный экран")
-                Button { controller.hide() } label: { Image(systemName: "xmark") }.help("Скрыть окно")
             }
             .buttonStyle(.borderless)
             .padding(.horizontal, 14).padding(.vertical, 8)
         }
+        .frame(height: 52)
     }
 
     private func toggleAudio() {
@@ -153,11 +153,6 @@ struct OverlayView: View {
 
     private var history: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(model.conversation.meeting.title).lineLimit(1)
-                Spacer()
-                Text(model.profile.title)
-            }.font(.caption).foregroundStyle(.secondary).padding(12)
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 16) {
@@ -165,15 +160,6 @@ struct OverlayView: View {
                             Label("Скрыто: \(model.conversation.hiddenMessageCount), сокращено: \(model.conversation.clippedMessageCount)",
                                   systemImage: "tray.full")
                                 .font(.caption).foregroundStyle(.secondary)
-                        }
-                        if model.conversation.messages.isEmpty && !busy {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Разговор готов").font(.title3.bold())
-                                Text("Введите вопрос ниже. Звук и расшифровка запускаются отдельно.")
-                                if model.providerSettings.configuration.mode == .demo {
-                                    Text("Демо показывает учебный пример без анализа вопроса и без сети.")
-                                }
-                            }.foregroundStyle(.secondary).padding(.top, 24)
                         }
                         ForEach(model.conversation.messages) { message in
                             VStack(alignment: .leading, spacing: 6) {
