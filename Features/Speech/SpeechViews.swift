@@ -29,11 +29,14 @@ struct SpeechSettingsView: View {
                 ForEach(speech.compatibleVoices, id: \.identifier) { Text("\($0.name) · \($0.language)").tag($0.identifier) }
             }
             Slider(value: $speech.rate, in: AVSpeechUtteranceMinimumSpeechRate...AVSpeechUtteranceMaximumSpeechRate) { Text("Скорость") }
+            Slider(value: $speech.volume, in: 0...1) { Text("Громкость") }
+            Toggle("Пропускать блоки кода Markdown", isOn: $speech.skipCodeBlocks)
             Toggle("Автоматически читать завершённые ответы", isOn: $speech.autoRead)
             Toggle("Понимаю, что голос может попасть в захватываемый системный звук", isOn: $speech.routingAcknowledged)
-            Text("Используются установленные системные голоса и системный аудиовыход. Приложение не скачивает голоса и не выбирает отдельное устройство вывода. Авточтение и согласие выключены после запуска.").font(.caption)
+            Text("Используются установленные системные голоса и системный аудиовыход. AVSpeechSynthesizer не позволяет приложению выбрать отдельное устройство или баланс каналов. Подтверждение маршрутизации звука сбрасывается после запуска.").font(.caption)
             HStack {
                 Button("Обновить голоса") { speech.reloadVoices() }
+                Button("Проверить голос") { speech.speak("Проверка выбранного голоса.") }
                 Button("Остановить озвучивание") { speech.stop() }
             }
             Text(speech.status).font(.caption).foregroundStyle(.secondary)

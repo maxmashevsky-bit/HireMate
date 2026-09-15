@@ -35,6 +35,10 @@ struct NotesView: View {
             VStack(alignment: .leading, spacing: 12) {
                 if let note = model.edited {
                     TextField("Название", text: noteBinding(\.title, default: ""))
+                    TextField("Папка", text: Binding(
+                        get: { model.edited?.folder ?? "" },
+                        set: { model.edited?.folder = $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+                    ))
                     TextField("Теги через запятую", text: $model.tagsText)
                     HStack {
                         Toggle("Закрепить", isOn: noteBinding(\.isPinned, default: false))

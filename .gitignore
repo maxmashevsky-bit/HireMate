@@ -24,6 +24,7 @@ docs/requirements.md
 docs/requirements-traceability.tsv
 docs/source-analysis.md
 docs/source-manifest.json
-docs/source/
+docs/source/*
+!docs/source/Codex_App_Final.docx
 docs/visual-reference-review.md
 scripts/check-project.py

@@ -1,6 +1,6 @@
 # План проверок
 ## Gates
-Только один этап IN_PROGRESS. Phase 0: checksum обоих источников; все [x] приложения A имеют строку, все содержательные строки мастер-ТЗ представлены, IDs уникальны, статусы валидны, документы присутствуют. Phase 1: Xcode Swift 6 Debug build, unit tests settings/presets/permission gating/fake stream cancellation, запуск .app, sidebar, menu bar, onboarding repeat, persisted settings, отсутствие автоматических permission/network calls. CLT fallback отдельно от Xcode gate.
+Только один этап IN_PROGRESS. Phase 0: checksum справочного TXT и главного DOCX; все [x] приложения A имеют строку, все 39 разделов нового DOCX присутствуют, IDs уникальны, статусы валидны, документы присутствуют. Phase 1: Xcode Swift 6 Debug build, unit tests settings/presets/permission gating/fake stream cancellation, запуск .app, sidebar, menu bar, onboarding repeat, persisted settings, отсутствие автоматических permission/network calls. CLT fallback отдельно от Xcode gate.
 
 Phase 2: global hotkeys вне app, focus/click-through, opacity/frame restore, display/Retina/fullscreen, compatibility truth test.
 Phase 3: fixtures ring buffer/VAD/timestamps, pre-roll, silence, cancel/device change/denial, CPU/memory.

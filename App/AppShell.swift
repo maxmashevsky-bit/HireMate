@@ -68,6 +68,7 @@ struct AppShell: View {
             case .transcription: TranscriptionView(app: model)
             case .audio: AudioCaptureView(audio: model.audio)
             case .meetings: MeetingsView(app: model)
+            case .vacancies: TrackerView(app: model)
             case .home: DemoView(model: model)
             case .contexts: ContextEditorView(app: model)
             case .settings: SettingsView(model: model)

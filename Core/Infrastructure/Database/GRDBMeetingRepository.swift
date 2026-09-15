@@ -1,7 +1,7 @@
 import Foundation
 import GRDB
 
-public actor GRDBMeetingRepository: MeetingRepository {
+public actor GRDBMeetingRepository: MeetingRepository, TrackerRepository {
     private var database: DatabaseQueue?
     private let directory: URL?
     public init(directory: URL? = nil) { self.directory = directory }
@@ -54,6 +54,30 @@ public actor GRDBMeetingRepository: MeetingRepository {
                 t.column("payload", .blob).notNull()
             }
             try db.execute(sql: "CREATE VIRTUAL TABLE note_fts USING fts5(chunkID UNINDEXED, noteID UNINDEXED, title, body, tokenize='unicode61')")
+        }
+        migrator.registerMigration("v3_vacancy_tracker") { db in
+            try db.create(table: "vacancy_stages") { t in
+                t.column("id", .text).primaryKey()
+                t.column("position", .integer).notNull().indexed()
+                t.column("payload", .blob).notNull()
+            }
+            try db.create(table: "vacancies") { t in
+                t.column("id", .text).primaryKey()
+                t.column("stageID", .text).notNull().indexed().references("vacancy_stages")
+                t.column("isArchived", .boolean).notNull().indexed()
+                t.column("updatedAt", .double).notNull()
+                t.column("payload", .blob).notNull()
+            }
+            try db.create(table: "vacancy_transitions") { t in
+                t.column("id", .text).primaryKey()
+                t.column("vacancyID", .text).notNull().indexed().references("vacancies", onDelete: .cascade)
+                t.column("happenedAt", .double).notNull()
+                t.column("payload", .blob).notNull()
+            }
+            for stage in VacancyStage.standard {
+                try db.execute(sql: "INSERT INTO vacancy_stages(id,position,payload) VALUES (?,?,?)",
+                               arguments: [stage.id.uuidString, stage.position, try JSONEncoder().encode(stage)])
+            }
         }
         try migrator.migrate(queue)
         database = queue
@@ -132,6 +156,88 @@ public actor GRDBMeetingRepository: MeetingRepository {
             let messages = try Data.fetchAll(db, sql: "SELECT m.payload FROM messages m JOIN subchats s ON s.id=m.subchatID WHERE s.meetingID=? ORDER BY m.createdAt,m.rowid", arguments: [id.uuidString]).map { try JSONDecoder().decode(ChatMessage.self, from: $0) }
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]; encoder.dateEncodingStrategy = .iso8601
             return try encoder.encode(Archive(version: 1, meeting: meeting, subchats: chats, messages: messages))
+        }
+    }
+
+    public func vacancyStages() async throws -> [VacancyStage] {
+        try await connection().read { db in
+            try Data.fetchAll(db, sql: "SELECT payload FROM vacancy_stages ORDER BY position,id")
+                .map { try JSONDecoder().decode(VacancyStage.self, from: $0) }
+        }
+    }
+
+    public func saveVacancyStages(_ stages: [VacancyStage]) async throws {
+        guard !stages.isEmpty, Set(stages.map(\.id)).count == stages.count,
+              stages.allSatisfy(\.isValid) else { throw LocalStoreError.invalidData }
+        try await connection().write { db in
+            for (position, value) in stages.enumerated() {
+                var stage = value; stage.position = position
+                let payload = try JSONEncoder().encode(stage)
+                try db.execute(sql: "INSERT INTO vacancy_stages(id,position,payload) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET position=excluded.position,payload=excluded.payload",
+                               arguments: [stage.id.uuidString, position, payload])
+            }
+        }
+    }
+
+    public func vacancies(includeArchived: Bool) async throws -> [Vacancy] {
+        try await connection().read { db in
+            let sql = includeArchived
+                ? "SELECT payload FROM vacancies ORDER BY updatedAt DESC,id"
+                : "SELECT payload FROM vacancies WHERE isArchived=0 ORDER BY updatedAt DESC,id"
+            return try Data.fetchAll(db, sql: sql).map { try JSONDecoder().decode(Vacancy.self, from: $0) }
+        }
+    }
+
+    public func saveVacancy(_ vacancy: Vacancy) async throws {
+        guard vacancy.isValid else { throw LocalStoreError.invalidData }
+        let payload = try JSONEncoder().encode(vacancy)
+        try await connection().write { db in
+            let stageExists = try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM vacancy_stages WHERE id=?)",
+                                                arguments: [vacancy.stageID.uuidString]) ?? false
+            guard stageExists else { throw LocalStoreError.missingRecord }
+            try db.execute(sql: "INSERT INTO vacancies(id,stageID,isArchived,updatedAt,payload) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET stageID=excluded.stageID,isArchived=excluded.isArchived,updatedAt=excluded.updatedAt,payload=excluded.payload",
+                           arguments: [vacancy.id.uuidString, vacancy.stageID.uuidString, vacancy.isArchived,
+                                       vacancy.updatedAt.timeIntervalSince1970, payload])
+        }
+    }
+
+    public func moveVacancy(id: UUID, to stageID: UUID, at date: Date = .now) async throws {
+        try await connection().write { db in
+            guard let data = try Data.fetchOne(db, sql: "SELECT payload FROM vacancies WHERE id=? AND isArchived=0",
+                                               arguments: [id.uuidString]) else { throw LocalStoreError.missingRecord }
+            let stageExists = try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM vacancy_stages WHERE id=?)",
+                                                arguments: [stageID.uuidString]) ?? false
+            guard stageExists else { throw LocalStoreError.missingRecord }
+            var vacancy = try JSONDecoder().decode(Vacancy.self, from: data)
+            guard vacancy.stageID != stageID else { return }
+            let transition = VacancyTransition(vacancyID: id, fromStageID: vacancy.stageID,
+                                                toStageID: stageID, happenedAt: date)
+            vacancy.stageID = stageID; vacancy.updatedAt = date
+            try db.execute(sql: "UPDATE vacancies SET stageID=?,updatedAt=?,payload=? WHERE id=?",
+                           arguments: [stageID.uuidString, date.timeIntervalSince1970,
+                                       try JSONEncoder().encode(vacancy), id.uuidString])
+            try db.execute(sql: "INSERT INTO vacancy_transitions(id,vacancyID,happenedAt,payload) VALUES (?,?,?,?)",
+                           arguments: [transition.id.uuidString, id.uuidString, date.timeIntervalSince1970,
+                                       try JSONEncoder().encode(transition)])
+        }
+    }
+
+    public func setVacancyArchived(id: UUID, archived: Bool, at date: Date = .now) async throws {
+        try await connection().write { db in
+            guard let data = try Data.fetchOne(db, sql: "SELECT payload FROM vacancies WHERE id=?",
+                                               arguments: [id.uuidString]) else { throw LocalStoreError.missingRecord }
+            var vacancy = try JSONDecoder().decode(Vacancy.self, from: data)
+            vacancy.isArchived = archived; vacancy.updatedAt = date
+            try db.execute(sql: "UPDATE vacancies SET isArchived=?,updatedAt=?,payload=? WHERE id=?",
+                           arguments: [archived, date.timeIntervalSince1970,
+                                       try JSONEncoder().encode(vacancy), id.uuidString])
+        }
+    }
+
+    public func vacancyTransitions() async throws -> [VacancyTransition] {
+        try await connection().read { db in
+            try Data.fetchAll(db, sql: "SELECT payload FROM vacancy_transitions ORDER BY happenedAt,id")
+                .map { try JSONDecoder().decode(VacancyTransition.self, from: $0) }
         }
     }
 }

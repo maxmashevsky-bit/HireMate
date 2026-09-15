@@ -20,6 +20,7 @@ final class AppModel {
     let secrets: any SecureSecretStore
     let conversation: ConversationModel
     let notes: NotesModel
+    let tracker: TrackerModel
     private let databaseBenchmark: LocalDatabaseBenchmark
     private let logger = Logger(subsystem: "dev.maxmashevsky.MaxInterviewCopilot", category: "lifecycle")
     var theme: AppTheme { didSet { preferences.theme = theme } }
@@ -41,6 +42,7 @@ final class AppModel {
          permissions: (any PermissionService)? = nil,
          secrets: (any SecureSecretStore)? = nil,
          repository: (any MeetingRepository & NoteRepository & NoteSearchService)? = nil,
+         trackerRepository: (any TrackerRepository)? = nil,
          audioCapture: (any AudioCaptureService)? = nil,
          transcriptionServiceFactory: ((ModelConfiguration) -> any TranscriptionService)? = nil,
          providerFactory: ((ModelConfiguration) -> any StreamingLLMProvider)? = nil) {
@@ -56,6 +58,7 @@ final class AppModel {
                                                 serviceFactory: transcriptionServiceFactory)
         self.databaseBenchmark = LocalDatabaseBenchmark(repository: resolvedRepository)
         self.notes = NotesModel(profile: resolvedPreferences.profile, repository: resolvedRepository)
+        self.tracker = TrackerModel(repository: trackerRepository ?? GRDBMeetingRepository())
         self.conversation = ConversationModel(profileID: resolvedPreferences.profile, repository: resolvedRepository,
                                               secrets: self.secrets, network: resolvedNetwork,
                                               noteSearch: resolvedRepository, providerFactory: providerFactory)
@@ -151,6 +154,19 @@ final class AppModel {
             notice = "Озвучивание может попасть в системный захват. Подтвердите это в настройках озвучивания или остановите захват звука."; return
         }
         speech.speak(answer)
+    }
+    func toggleLastSpeechFromShortcut() {
+        if speech.isSpeaking {
+            speech.stop()
+        } else {
+            speakAnswer()
+        }
+    }
+    func toggleAutomaticSpeechFromShortcut() {
+        speech.autoRead.toggle()
+        notice = speech.autoRead
+            ? "Автоматическая озвучка завершённых ответов включена."
+            : "Автоматическая озвучка завершённых ответов выключена."
     }
     func saveSecret(_ value: String) {
         do { try secrets.save(value); notice = "Ключ сохранён в macOS Keychain. Демо его не использует." }

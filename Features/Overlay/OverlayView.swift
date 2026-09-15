@@ -12,6 +12,8 @@ struct OverlayView: View {
     @State private var appearanceSettings = false
     @State private var newChat = false
     @State private var chatTitle = ""
+    @State private var noteQuery = ""
+    @State private var selectedNoteID: UUID?
     private var busy: Bool { model.isGenerating || model.conversation.isLoading }
     private var canSend: Bool {
         !busy && InputValidation.canSend(model.question) &&
@@ -23,7 +25,7 @@ struct OverlayView: View {
             header
             Divider()
             if controller.isClickThrough {
-                Text("Вернуть ввод: \(controller.preferences.shortcutPreset.symbols)D")
+                Text(controller.restoreInputHint)
                     .font(.caption).padding(8).frame(maxWidth: .infinity).background(.yellow.opacity(0.15))
             }
             HStack(spacing: 0) {
@@ -35,22 +37,33 @@ struct OverlayView: View {
                     history
                     composer
                 }
+                if controller.isNotesPanelVisible {
+                    Divider()
+                    notesPanel
+                }
             }
         }
+        .disabled(controller.isCompatibilityMarkerVisible)
+        .accessibilityHidden(controller.isCompatibilityMarkerVisible)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius))
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.cornerRadius))
         .overlay(RoundedRectangle(cornerRadius: DesignTokens.cornerRadius).strokeBorder(.secondary.opacity(0.25)))
-        .overlay(alignment: .topLeading) {
+        .overlay {
             if controller.isCompatibilityMarkerVisible {
-                HStack(spacing: 0) {
-                    Color(red: 1, green: 0, blue: 0.82)
-                    Color(red: 0, green: 1, blue: 0.82)
+                ZStack(alignment: .topLeading) {
+                    Color.black
+                    VStack(alignment: .leading, spacing: 18) {
+                        HStack(spacing: 0) {
+                            Color(red: 1, green: 0, blue: 0.82)
+                            Color(red: 0, green: 1, blue: 0.82)
+                        }
+                        .frame(width: 128, height: 48)
+                        .accessibilityHidden(true)
+                        Text("Проверка захвата окна…").foregroundStyle(.white)
+                    }
+                    .padding(18)
                 }
-                .frame(width: 128, height: 48)
-                .background(.black)
-                .padding(18)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.cornerRadius))
             }
         }
         .tint(DesignTokens.accent)
@@ -87,6 +100,10 @@ struct OverlayView: View {
             Button { appearanceSettings.toggle() } label: { Image(systemName: "slider.horizontal.3") }
                 .help("Прозрачность и управление окном")
                 .popover(isPresented: $appearanceSettings) { appearanceForm }
+            Button { controller.toggleNotesPanel() } label: { Image(systemName: "note.text") }
+                .help("Показать или скрыть заметки")
+            Button { controller.teleprompter.toggle() } label: { Image(systemName: "text.viewfinder") }
+                .help("Показать или скрыть телесуфлёр")
             Button { controller.openMain(.home) } label: { Image(systemName: "house") }.help("Главный экран")
             Button { controller.hide() } label: { Image(systemName: "xmark") }.help("Скрыть окно")
         }.buttonStyle(.borderless).padding(.horizontal, 14).padding(.vertical, 8)
@@ -201,7 +218,8 @@ struct OverlayView: View {
                 Button { controller.openMain(.contexts) } label: { Image(systemName: "person.text.rectangle") }.help("Контекст профиля")
                 Button { controller.openMain(.screenshot) } label: { Image(systemName: "camera") }.help("Подготовить снимок экрана")
                 Button { controller.openMain(.transcription) } label: { Image(systemName: "text.bubble") }.help("Распознать выбранный аудиофрагмент")
-                Button { controller.openMain(.notes) } label: { Image(systemName: "note.text") }.help("Заметки профиля")
+                Button { controller.toggleNotesPanel() } label: { Image(systemName: "note.text") }.help("Заметки профиля")
+                Button { controller.teleprompter.toggle() } label: { Image(systemName: "text.viewfinder") }.help("Телесуфлёр")
                 Spacer()
                 Text("\(model.question.count) / 4 000").font(.caption).foregroundStyle(.secondary)
                 Button { model.stop() } label: { Image(systemName: "stop.fill") }.disabled(!busy).help("Остановить ответ")
@@ -214,10 +232,87 @@ struct OverlayView: View {
         }.padding(12)
     }
 
+    private var filteredNotes: [Note] {
+        let value = noteQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return model.notes.notes }
+        return model.notes.notes.filter {
+            $0.title.localizedCaseInsensitiveContains(value) ||
+            $0.markdown.localizedCaseInsensitiveContains(value) ||
+            ($0.folder?.localizedCaseInsensitiveContains(value) ?? false)
+        }
+    }
+
+    private var noteFolders: [String] {
+        Array(Set(filteredNotes.map { note in
+            let folder = note.folder?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return folder.isEmpty ? "Без папки" : folder
+        })).sorted { left, right in
+            if left == "Без папки" { return true }
+            if right == "Без папки" { return false }
+            return left.localizedCaseInsensitiveCompare(right) == .orderedAscending
+        }
+    }
+
+    private var notesPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Заметки").font(.headline)
+                Spacer()
+                Text(controller.preferences.shortcutLabel(for: .notes)).font(.caption).foregroundStyle(.secondary)
+                Button { controller.toggleNotesPanel() } label: { Image(systemName: "xmark") }
+                    .help("Закрыть заметки")
+            }
+            TextField("Поиск по заметкам", text: $noteQuery)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(noteFolders, id: \.self) { folder in
+                        DisclosureGroup(folder) {
+                            ForEach(filteredNotes.filter {
+                                ($0.folder?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                                 ? $0.folder! : "Без папки") == folder
+                            }) { note in
+                                Button(note.title) { selectedNoteID = note.id }
+                                    .buttonStyle(.plain)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                    }
+                    if filteredNotes.isEmpty {
+                        ContentUnavailableView("Заметки не найдены", systemImage: "note.text")
+                    }
+                }
+            }
+            Divider()
+            if let note = model.notes.notes.first(where: { $0.id == selectedNoteID }) {
+                Text(note.title).font(.subheadline.bold())
+                ScrollView {
+                    Text(.init(note.markdown)).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                Text("Выберите заметку").foregroundStyle(.secondary)
+            }
+            Button("Открыть редактор заметок") { controller.openMain(.notes) }
+        }
+        .padding(12)
+        .frame(width: 300)
+    }
+
     private var appearanceForm: some View {
         @Bindable var preferences = controller.preferences
         return VStack(alignment: .leading, spacing: 14) {
-            Text("Прозрачность: \(Int(preferences.opacity * 100))%")
+            HStack {
+                Text("Непрозрачность")
+                Spacer()
+                TextField("Проценты", value: Binding(
+                    get: { Int((preferences.opacity * 100).rounded()) },
+                    set: { preferences.opacity = Double(min(100, max(35, $0))) / 100 }
+                ), format: .number)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 56)
+                .accessibilityLabel("Непрозрачность окна, проценты")
+                Text("%")
+            }
             Slider(value: $preferences.opacity, in: 0.35...1)
             Button(controller.isClickThrough ? "Вернуть клики окну" : "Пропускать клики сквозь окно") {
                 appearanceSettings = false; controller.toggleClickThrough()
@@ -227,32 +322,38 @@ struct OverlayView: View {
             HStack {
                 Text("Сдвинуть")
                 Spacer()
-                Button { controller.moveBy(dx: -24, dy: 0) } label: { Image(systemName: "arrow.left") }
+                Button { controller.moveBy(dx: -preferences.moveStep, dy: 0) } label: { Image(systemName: "arrow.left") }
                     .help("Сдвинуть влево")
-                Button { controller.moveBy(dx: 0, dy: 24) } label: { Image(systemName: "arrow.up") }
+                Button { controller.moveBy(dx: 0, dy: preferences.moveStep) } label: { Image(systemName: "arrow.up") }
                     .help("Сдвинуть вверх")
-                Button { controller.moveBy(dx: 0, dy: -24) } label: { Image(systemName: "arrow.down") }
+                Button { controller.moveBy(dx: 0, dy: -preferences.moveStep) } label: { Image(systemName: "arrow.down") }
                     .help("Сдвинуть вниз")
-                Button { controller.moveBy(dx: 24, dy: 0) } label: { Image(systemName: "arrow.right") }
+                Button { controller.moveBy(dx: preferences.moveStep, dy: 0) } label: { Image(systemName: "arrow.right") }
                     .help("Сдвинуть вправо")
             }
             HStack {
                 Text("Ширина")
                 Spacer()
-                Button { controller.resizeBy(dx: -24, dy: 0) } label: { Image(systemName: "minus") }
+                Button { controller.resizeBy(dx: -preferences.resizeStep, dy: 0) } label: { Image(systemName: "minus") }
                     .help("Уменьшить ширину")
-                Button { controller.resizeBy(dx: 24, dy: 0) } label: { Image(systemName: "plus") }
+                Button { controller.resizeBy(dx: preferences.resizeStep, dy: 0) } label: { Image(systemName: "plus") }
                     .help("Увеличить ширину")
             }
             HStack {
                 Text("Высота")
                 Spacer()
-                Button { controller.resizeBy(dx: 0, dy: -24) } label: { Image(systemName: "minus") }
+                Button { controller.resizeBy(dx: 0, dy: -preferences.resizeStep) } label: { Image(systemName: "minus") }
                     .help("Уменьшить высоту")
-                Button { controller.resizeBy(dx: 0, dy: 24) } label: { Image(systemName: "plus") }
+                Button { controller.resizeBy(dx: 0, dy: preferences.resizeStep) } label: { Image(systemName: "plus") }
                     .help("Увеличить высоту")
             }
-            Text("Вернуть ввод: \(preferences.shortcutPreset.symbols)D").font(.caption)
+            Button("Перенести на следующий дисплей") {
+                appearanceSettings = false
+                controller.moveToNextScreen()
+            }
+            .disabled(controller.connectedScreenCount < 2)
+            .help("Восстановить положение окна на следующем подключённом дисплее")
+            Text(controller.restoreInputHint).font(.caption)
         }.buttonStyle(.borderless).padding(20).frame(width: 330)
     }
 

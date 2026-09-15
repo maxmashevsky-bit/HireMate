@@ -61,6 +61,41 @@ final class CoreTests: XCTestCase {
         XCTAssertTrue(deleted.isEmpty); XCTAssertEqual(remaining.map(\.id), [second.id])
     }
 
+    func testVacancyTrackerPersistsMovesArchiveAndCustomStageOrder() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("hiremate-tracker-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = GRDBMeetingRepository(directory: directory)
+        var stages = try await repository.vacancyStages()
+        XCTAssertEqual(stages.map(\.name), VacancyStage.standard.map(\.name))
+        let custom = VacancyStage(name: "Тестовое задание", position: 1)
+        stages.insert(custom, at: 1)
+        try await repository.saveVacancyStages(stages)
+
+        let vacancy = Vacancy(stageID: stages[0].id, company: "Acme", title: "Go Developer",
+                              salary: "200–250", grade: "Junior", workFormat: "Удалённо")
+        try await repository.saveVacancy(vacancy)
+        let movedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        try await repository.moveVacancy(id: vacancy.id, to: custom.id, at: movedAt)
+        var loaded = try await repository.vacancies(includeArchived: false)
+        XCTAssertEqual(loaded.first?.stageID, custom.id)
+        let transitions = try await repository.vacancyTransitions()
+        XCTAssertEqual(transitions.first?.happenedAt, movedAt)
+
+        try await repository.setVacancyArchived(id: vacancy.id, archived: true, at: movedAt.addingTimeInterval(10))
+        loaded = try await repository.vacancies(includeArchived: false)
+        XCTAssertTrue(loaded.isEmpty)
+        let archived = try await repository.vacancies(includeArchived: true).filter(\.isArchived)
+        XCTAssertEqual(archived.map(\.id), [vacancy.id])
+
+        let reopened = GRDBMeetingRepository(directory: directory)
+        let reopenedStages = try await reopened.vacancyStages()
+        XCTAssertEqual(reopenedStages.map(\.id), stages.enumerated().map { index, stage in
+            var value = stage; value.position = index; return value.id
+        })
+        let reopenedTransitions = try await reopened.vacancyTransitions()
+        XCTAssertEqual(reopenedTransitions.count, 1)
+    }
+
     @MainActor
     func testDatabaseNoteIndexReplacementAndConsent() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("hiremate-fts-" + UUID().uuidString)

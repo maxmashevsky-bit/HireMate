@@ -13,6 +13,13 @@ private actor DelayedNotes: NoteRepository {
 }
 
 final class NotesFlowTests: XCTestCase {
+    func testFolderSurvivesArchiveRoundTrip() throws {
+        var note = Note(profileID: .technical, title: "Алгоритмы", markdown: "Текст")
+        note.folder = "Подготовка"
+        let restored = try NoteArchive.decode(try NoteArchive(note: note).encode()).importedNote()
+        XCTAssertEqual(restored.folder, "Подготовка")
+    }
+
     @MainActor
     private func waitUntil(_ predicate: () -> Bool) async throws {
         let deadline = ContinuousClock.now + .seconds(3)

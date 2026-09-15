@@ -85,6 +85,7 @@ private final class CopilotPanel: NSPanel {
 final class OverlayController: NSObject, NSWindowDelegate {
     let preferences = OverlayPreferences()
     let hotkeys = GlobalHotkeyService()
+    let teleprompter = TeleprompterController()
     private let compatibilityTester: any OverlayCompatibilityTesting
     private weak var model: AppModel?
     var openMainWindow: (() -> Void)?
@@ -92,14 +93,20 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var screenObserver: NSObjectProtocol?
     private var compatibilityTask: Task<Void, Never>?
     private var isRestoringFrame = false
+    private(set) var connectedScreenCount = NSScreen.screens.count
     private(set) var isVisible = false
     private(set) var isClickThrough = false
     private(set) var focusRequest = 0
     private(set) var historyScrollRequest = 0
     private(set) var historyScrollDirection = 1
     private(set) var isChatRailVisible = true
+    private(set) var isNotesPanelVisible = false
     private(set) var compatibilityResult: OverlayCaptureCompatibility = .notTested
     private(set) var isCompatibilityMarkerVisible = false
+
+    var restoreInputHint: String {
+        preferences.restoreInputHint(focusShortcutRegistered: hotkeys.registeredActions.contains(.focus))
+    }
 
     init(compatibilityTester: (any OverlayCompatibilityTesting)? = nil) {
         self.compatibilityTester = compatibilityTester ?? NativeOverlayCompatibilityTester()
@@ -107,18 +114,24 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     func connect(model: AppModel) {
         self.model = model
+        teleprompter.connect(app: model)
         configureHotkeys()
         guard screenObserver == nil else { return }
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.keepOnVisibleScreen() }
+            Task { @MainActor in
+                self?.connectedScreenCount = NSScreen.screens.count
+                self?.keepOnVisibleScreen()
+                self?.saveFrame()
+            }
         }
     }
 
     func configureHotkeys() {
         hotkeys.configure(enabled: preferences.shortcutsEnabled, preset: preferences.shortcutPreset,
-                          overrides: preferences.hotkeyOverrides) { [weak self] in
+                          overrides: preferences.hotkeyOverrides,
+                          disabledActionIDs: Set(preferences.disabledHotkeyActions.compactMap(UInt32.init))) { [weak self] in
             self?.perform($0)
         }
     }
@@ -186,8 +199,14 @@ final class OverlayController: NSObject, NSWindowDelegate {
         focusRequest += 1
     }
 
+    func toggleNotesPanel() {
+        if !isVisible { show() }
+        isNotesPanelVisible.toggle()
+        if isNotesPanelVisible { Task { await model?.notes.refresh() } }
+    }
+
     func applyOpacity() {
-        panel?.alphaValue = CGFloat(min(1, max(0.35, preferences.opacity)))
+        panel?.alphaValue = isCompatibilityMarkerVisible ? 1 : CGFloat(min(1, max(0.35, preferences.opacity)))
     }
 
     func startDragging(_ event: NSEvent) { panel?.performDrag(with: event) }
@@ -207,6 +226,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
         compatibilityResult = .running
         isCompatibilityMarkerVisible = true
+        applyOpacity()
         panel.sharingType = .readOnly
         panel.displayIfNeeded()
         compatibilityTask = Task { @MainActor [weak self] in
@@ -214,6 +234,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             defer {
                 panel.sharingType = .none
                 isCompatibilityMarkerVisible = false
+                applyOpacity()
                 compatibilityTask = nil
                 if !wasVisible { hide() }
             }
@@ -259,21 +280,21 @@ final class OverlayController: NSObject, NSWindowDelegate {
         case .cancel: model?.stop()
         case .dim: preferences.opacity = max(0.35, preferences.opacity - 0.05); applyOpacity()
         case .brighten: preferences.opacity = min(1, preferences.opacity + 0.05); applyOpacity()
-        case .left: moveBy(dx: -24, dy: 0)
-        case .right: moveBy(dx: 24, dy: 0)
-        case .up: moveBy(dx: 0, dy: 24)
-        case .down: moveBy(dx: 0, dy: -24)
-        case .narrower: resizeBy(dx: -24, dy: 0)
-        case .wider: resizeBy(dx: 24, dy: 0)
-        case .shorter: resizeBy(dx: 0, dy: -24)
-        case .taller: resizeBy(dx: 0, dy: 24)
+        case .left: moveBy(dx: -preferences.moveStep, dy: 0)
+        case .right: moveBy(dx: preferences.moveStep, dy: 0)
+        case .up: moveBy(dx: 0, dy: preferences.moveStep)
+        case .down: moveBy(dx: 0, dy: -preferences.moveStep)
+        case .narrower: resizeBy(dx: -preferences.resizeStep, dy: 0)
+        case .wider: resizeBy(dx: preferences.resizeStep, dy: 0)
+        case .shorter: resizeBy(dx: 0, dy: -preferences.resizeStep)
+        case .taller: resizeBy(dx: 0, dy: preferences.resizeStep)
         case .screenshot:
             openMain(.screenshot)
             model?.screenshot.capturePrimaryDisplay(forRegion: false)
         case .regionScreenshot:
             openMain(.screenshot)
             model?.screenshot.capturePrimaryDisplay(forRegion: true)
-        case .notes: openMain(.notes)
+        case .notes: toggleNotesPanel()
         case .sendWithScreenshot:
             guard model?.conversation.attachment != nil else {
                 model?.notice = "Сначала приложите просмотренный снимок экрана."
@@ -289,6 +310,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
         case .resetContext: model?.resetCurrentContext()
         case .toggleAudio: model?.toggleAudioFromShortcut()
         case .toggleAutomaticQuestions: model?.toggleAutomaticQuestionsFromShortcut()
+        case .toggleLastSpeech: model?.toggleLastSpeechFromShortcut()
+        case .toggleAutomaticSpeech: model?.toggleAutomaticSpeechFromShortcut()
+        case .toggleTeleprompter: teleprompter.toggle()
+        case .toggleTeleprompterClickThrough: teleprompter.toggleClickThrough()
         case .scrollUp: requestHistoryScroll(direction: -1)
         case .scrollDown: requestHistoryScroll(direction: 1)
         }
@@ -306,6 +331,21 @@ final class OverlayController: NSObject, NSWindowDelegate {
         saveFrame()
     }
 
+    func moveToNextScreen() {
+        let screens = NSScreen.screens
+        guard let panel, isVisible, screens.count > 1 else { return }
+        let current = screens.firstIndex { $0 == panel.screen } ?? -1
+        let target = screens[(current + 1) % screens.count]
+        saveFrame()
+        let area = target.visibleFrame
+        let centered = NSRect(x: area.midX - panel.frame.width / 2,
+                              y: area.midY - panel.frame.height / 2,
+                              width: panel.frame.width, height: panel.frame.height)
+        restoreFrame(preferences.savedFrame(for: target, minimumSize: panel.minSize) ?? centered,
+                     on: target)
+        preferences.save(frame: panel.frame, screen: target, minimumSize: panel.minSize)
+    }
+
     private func restoreFrame(_ proposed: NSRect, on screen: NSScreen) {
         guard let panel else { return }
         guard let frame = OverlayPreferences.clampedFrame(proposed, to: screen.visibleFrame,
@@ -317,12 +357,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     private func keepOnVisibleScreen() {
         guard let panel else { return }
-        let target = NSScreen.screens.max { left, right in
-            let a = left.visibleFrame.intersection(panel.frame)
-            let b = right.visibleFrame.intersection(panel.frame)
-            return (a.isNull ? 0 : a.width * a.height) < (b.isNull ? 0 : b.width * b.height)
-        }
-        if let target { restoreFrame(panel.frame, on: target) }
+        let screens = NSScreen.screens
+        let preferred = screens.firstIndex { $0 == panel.screen }
+            ?? screens.firstIndex { $0 == NSScreen.main }
+        guard let index = OverlayPreferences.targetScreenIndex(
+            for: panel.frame, visibleFrames: screens.map(\.visibleFrame), preferredIndex: preferred
+        ) else { return }
+        restoreFrame(panel.frame, on: screens[index])
     }
 
     private func saveFrame() {
@@ -334,6 +375,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) { saveFrame(); isVisible = false }
 
     func shutdown() {
+        teleprompter.shutdown()
+        panel?.sharingType = .none
         compatibilityTask?.cancel()
         compatibilityTask = nil
         isCompatibilityMarkerVisible = false

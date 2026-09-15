@@ -6,6 +6,7 @@ public struct NoteArchive: Codable, Sendable {
     public let version: Int
     public let title: String
     public let markdown: String
+    public let folder: String?
     public let tags: [String]
     public let profileID: ProfileID
     public let isPinned: Bool
@@ -16,7 +17,7 @@ public struct NoteArchive: Codable, Sendable {
     public let originalSourceHash: String?
     public init(note: Note) {
         format = "max-interview-note"; version = 1
-        title = note.title; markdown = note.markdown; tags = note.tags; profileID = note.profileID
+        title = note.title; markdown = note.markdown; folder = note.folder; tags = note.tags; profileID = note.profileID
         isPinned = note.isPinned; isArchived = note.isArchived
         createdAt = note.createdAt; updatedAt = note.updatedAt
         contentHash = Note.hash(note.markdown); originalSourceHash = note.sourceHash
@@ -34,6 +35,7 @@ public struct NoteArchive: Codable, Sendable {
               archive.markdown.utf8.count <= 1_048_576,
               !archive.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               archive.title.count <= 200, archive.tags.count <= 30,
+              (archive.folder?.count ?? 0) <= 200,
               archive.tags.allSatisfy({ !$0.isEmpty && $0.count <= 80 }),
               archive.createdAt.timeIntervalSince1970.isFinite, archive.updatedAt.timeIntervalSince1970.isFinite else { throw LocalStoreError.invalidData }
         return archive
@@ -41,7 +43,7 @@ public struct NoteArchive: Codable, Sendable {
     public func importedNote() -> Note {
         // Новый UUID предотвращает перезапись существующей заметки при повторном импорте.
         var note = Note(profileID: profileID, title: title, markdown: markdown)
-        note.tags = tags; note.isPinned = isPinned; note.isArchived = isArchived
+        note.folder = folder; note.tags = tags; note.isPinned = isPinned; note.isArchived = isArchived
         note.sourceHash = originalSourceHash; note.allowAI = false
         return note
     }

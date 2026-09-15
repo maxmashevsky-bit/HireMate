@@ -6,6 +6,7 @@ public struct Note: Codable, Identifiable, Sendable, Equatable {
     public let profileID: ProfileID
     public var title: String
     public var markdown: String
+    public var folder: String?
     public var tags: [String] = []
     public var isPinned = false
     public var isArchived = false
