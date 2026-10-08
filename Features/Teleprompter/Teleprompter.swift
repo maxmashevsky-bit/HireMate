@@ -1,6 +1,7 @@
 import AppKit
 import Observation
 import SwiftUI
+import CopilotCore
 
 enum TeleprompterPosition: String, CaseIterable, Identifiable {
     case top, center, bottom
@@ -29,6 +30,7 @@ enum TeleprompterContentSource: String, CaseIterable, Identifiable {
 @MainActor @Observable
 final class TeleprompterModel {
     private let defaults: UserDefaults
+    let appearance: TeleprompterAppearance
     @ObservationIgnored private var playbackTask: Task<Void, Never>?
     var text: String { didSet { defaults.set(text, forKey: "teleprompter.text"); clampIndex() } }
     var fontSize: Double { didSet { defaults.set(min(72, max(18, fontSize)), forKey: "teleprompter.fontSize") } }
@@ -41,6 +43,7 @@ final class TeleprompterModel {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        appearance = TeleprompterAppearance(defaults: defaults)
         text = defaults.string(forKey: "teleprompter.text") ?? ""
         let savedFont = defaults.object(forKey: "teleprompter.fontSize") as? Double ?? 34
         fontSize = savedFont.isFinite ? min(72, max(18, savedFont)) : 34
@@ -179,7 +182,7 @@ final class TeleprompterController: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) { hide() }
-    func shutdown() { settings.stop(); panel?.sharingType = .readOnly; panel?.close(); panel = nil; isVisible = false }
+    func shutdown() { settings.stop(); panel?.sharingType = .none; panel?.close(); panel = nil; isVisible = false }
 }
 
 @MainActor
@@ -211,8 +214,10 @@ private struct TeleprompterView: View {
             }
         }
         .frame(minWidth: 620, minHeight: settingsVisible ? 390 : 190)
-        .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 16))
+        .background(DesignTokens.color(for: model.appearance.background), in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(.secondary.opacity(0.35)))
+        .tint(DesignTokens.accent)
+        .preferredColorScheme(model.appearance.background.prefersDarkText ? .light : .dark)
         .onChange(of: model.opacity) { _, _ in controller.applyOpacity() }
         .onChange(of: model.position) { _, _ in controller.applyPosition() }
     }
@@ -224,7 +229,7 @@ private struct TeleprompterView: View {
                     ForEach(Array(model.words.enumerated()), id: \.offset) { index, word in
                         Text(word)
                             .font(.system(size: model.fontSize, weight: index == model.activeWordIndex ? .bold : .regular))
-                            .foregroundStyle(index == model.activeWordIndex ? Color.orange : .primary.opacity(0.62))
+                            .foregroundStyle(DesignTokens.color(for: index == model.activeWordIndex ? model.appearance.active : model.appearance.neighbor))
                             .id(index)
                     }
                 }.padding(.horizontal, 28).frame(minHeight: 120)
@@ -234,10 +239,15 @@ private struct TeleprompterView: View {
     }
 
     private var settingsTabs: some View {
-        TabView {
+        @Bindable var colors = model.appearance
+        return TabView {
             Form {
                 Slider(value: $model.fontSize, in: 18...72) { Text("Размер текста") }
                 Slider(value: $model.opacity, in: 0.35...1) { Text("Непрозрачность") }
+                HMColorPicker(title: "Цвет фона", value: $colors.background)
+                HMColorPicker(title: "Соседние слова", value: $colors.neighbor)
+                HMColorPicker(title: "Активное слово", value: $colors.active)
+                Button("Сбросить цвета") { colors.reset() }
             }.tabItem { Text("Внешний вид") }
             TextEditor(text: $model.text).font(.body.monospaced()).padding(8)
                 .tabItem { Text("Текст") }

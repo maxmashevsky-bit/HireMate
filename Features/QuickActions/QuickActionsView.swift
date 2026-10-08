@@ -8,13 +8,15 @@ struct QuickActionsView: View {
     var body: some View {
         Form {
             Section("Пять действий") {
-                Text("Сочетания \(app.overlay.preferences.shortcutPreset.symbols)1–5 используют соответствующий слот. Другой профиль нужно выбрать вручную: контексты не смешиваются.")
+                Text("Сочетания каждого слота настраиваются в разделе горячих клавиш. Другой профиль нужно выбрать вручную: контексты не смешиваются.")
                 ForEach(app.quickActions.actions) { action in
                     HStack {
                         Text("\(action.slot)").monospacedDigit()
                         VStack(alignment: .leading) {
                             Text(action.name).font(.headline)
                             Text(action.profileID.title).font(.caption).foregroundStyle(.secondary)
+                            Text(app.overlay.preferences.quickActionShortcutLabel(slot: action.slot))
+                                .font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
                         }
                         Spacer()
                         Button("Настроить") { edited = action }
@@ -32,7 +34,7 @@ struct QuickActionsView: View {
 }
 
 @MainActor
-private struct QuickActionEditor: View {
+struct QuickActionEditor: View {
     let store: QuickActionStore
     @State var action: QuickAction
     @Environment(\.dismiss) private var dismiss
@@ -77,7 +79,8 @@ struct QuickActionConfirmation: View {
                 Button("Отмена") { app.pendingQuickAction = nil }
                 Spacer()
                 Button("Выполнить") { app.runQuickAction(action) }.buttonStyle(.borderedProminent)
-                    .disabled(app.conversation.isGenerating || action.profileID != app.profile)
+                    .disabled(app.conversation.isGenerating || app.conversation.isLoading || action.profileID != app.profile ||
+                              (app.providerSettings.configuration.mode == .remote && !conversation.remoteConsent))
             }
         }.padding(24).frame(width: 560)
     }

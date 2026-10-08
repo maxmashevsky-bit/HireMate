@@ -15,6 +15,7 @@ final class ConversationModel {
     func removeAttachment() { attachment = nil }
     var remoteConsent = false
     var onCompletedAnswer: ((String) -> Void)?
+    var onMeetingActivated: ((UUID) -> Void)?
     var status = "Демонстрация без сети"
     var newMeetingTitle = "Новая встреча"
     var saveNewMeetingHistory = false
@@ -22,6 +23,7 @@ final class ConversationModel {
     var pendingChatID: UUID?
     private(set) var profiles = ProfileID.allCases.map { ContextProfile(id: $0) }
     private(set) var savedMeetings: [Meeting] = []
+    private(set) var meetingOverviews: [UUID: MeetingOverview] = [:]
     private(set) var meeting: Meeting
     private(set) var chats: [Subchat]
     private(set) var activeChatID: UUID
@@ -90,9 +92,10 @@ final class ConversationModel {
         let id = navigationID; let profile = meeting.profileID
         do {
             let loaded = try await repository.profiles()
-            let meetings = try await repository.meetings(profile: profile)
+            let overviews = try await repository.meetingOverviews(profile: profile)
             guard navigationID == id else { return }
-            self.profiles = loaded; savedMeetings = meetings
+            self.profiles = loaded; savedMeetings = overviews.map(\.meeting)
+            meetingOverviews = Dictionary(uniqueKeysWithValues: overviews.map { ($0.meeting.id, $0) })
         } catch { status = "Не удалось открыть локальную библиотеку. Текущий разговор остаётся в памяти." }
     }
     func activateProfile(_ id: ProfileID) {
@@ -101,14 +104,15 @@ final class ConversationModel {
         navigationID = UUID(); isLoading = false
         let next = Meeting(profileID: id, title: "Разговор без сохранения", isEphemeral: true)
         activate(next, chats: [Subchat(meetingID: next.id, title: "Основной")])
-        savedMeetings = []; remoteConsent = false
+        savedMeetings = []; meetingOverviews = [:]; remoteConsent = false
         Task { await loadLibrary() }
     }
     func createMeeting() async {
         guard !isLoading else { return }
-        cancel()
-        let title = String(newMeetingTitle.trimmingCharacters(in: .whitespacesAndNewlines).prefix(120))
+        let title = newMeetingTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { status = "Введите название встречи."; return }
+        guard title.count <= 120 else { status = "Название встречи ограничено 120 символами."; return }
+        cancel()
         let next = Meeting(profileID: meeting.profileID, title: title, isEphemeral: !saveNewMeetingHistory)
         let chat = Subchat(meetingID: next.id, title: "Основной")
         let navigation = UUID(); navigationID = navigation; isLoading = true
@@ -120,12 +124,38 @@ final class ConversationModel {
             await loadLibrary()
         } catch { status = "Не удалось сохранить встречу. Новый разговор не создан." }
     }
+    func renameMeeting(_ selected: Meeting, to name: String) async -> Bool {
+        guard !isLoading, selected.profileID == meeting.profileID else { return false }
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.count <= 120 else {
+            status = "Введите название встречи от 1 до 120 символов."; return false
+        }
+        let navigation = UUID(); navigationID = navigation; isLoading = true
+        defer { if navigationID == navigation { isLoading = false } }
+        do {
+            let renamed = try await repository.renameMeeting(id: selected.id, profile: selected.profileID, title: name)
+            guard navigationID == navigation else { return false }
+            if let index = savedMeetings.firstIndex(where: { $0.id == renamed.id }) { savedMeetings[index] = renamed }
+            if meeting.id == renamed.id { meeting = renamed }
+            if let overview = meetingOverviews[renamed.id] {
+                meetingOverviews[renamed.id] = MeetingOverview(meeting: renamed, subchatCount: overview.subchatCount,
+                                                              messageCount: overview.messageCount)
+            }
+            status = "Название встречи сохранено."; return true
+        } catch {
+            if navigationID == navigation { status = "Название встречи не сохранено. Исправьте имя или повторите попытку." }
+            return false
+        }
+    }
     func open(_ selected: Meeting) async {
         guard selected.profileID == meeting.profileID, !isLoading else { return }
         cancel()
         let navigation = UUID(); navigationID = navigation; isLoading = true
         defer { if navigationID == navigation { isLoading = false } }
         do {
+            await waitForGenerationWrites(meetingID: selected.id)
+            await flushPendingMessages()
+            guard navigationID == navigation else { return }
             let chats = try await repository.subchats(meetingID: selected.id)
             guard let first = chats.first else { throw LocalStoreError.invalidData }
             let history = try await repository.messages(subchatID: first.id, meetingID: selected.id)
@@ -261,6 +291,7 @@ final class ConversationModel {
             try await repository.deleteMeeting(id: selected.id)
             guard navigationID == navigation else { return }
             savedMeetings.removeAll { $0.id == selected.id }
+            meetingOverviews.removeValue(forKey: selected.id)
             failedMessageWrites = failedMessageWrites.filter { $0.value.meetingID != selected.id }
             if meeting.id == selected.id {
                 let next = Meeting(profileID: selected.profileID, title: "Разговор без сохранения", isEphemeral: true)
@@ -275,8 +306,25 @@ final class ConversationModel {
     }
 
     func send(configuration: ModelConfiguration, action: QuickAction? = nil, transcriptContext: String = "",
-              includeAttachedImage: Bool = true) {
-        guard !isGenerating, !isLoading else { return }
+              includeAttachedImage: Bool = true, replacingCurrentGeneration: Bool = false,
+              retainingPartialAnswer: Bool = true) {
+        guard !isLoading else { return }
+        if isGenerating {
+            guard replacingCurrentGeneration, action == nil, InputValidation.canSend(draft) else { return }
+            guard configuration.mode == .demo || remoteConsent else {
+                status = "Подтвердите отправку текста и активного контекста выбранному API."
+                return
+            }
+            if configuration.mode == .remote {
+                do { try configuration.validate() }
+                catch { status = (error as? ProviderError)?.localizedDescription ?? "Проверьте настройки API."; return }
+            }
+            if includeAttachedImage, attachment != nil, configuration.mode == .remote, !configuration.visionEnabled {
+                status = ProviderError.unsupportedFeature.localizedDescription
+                return
+            }
+            cancel(retainingPartialAnswer: retainingPartialAnswer)
+        }
         retrievedNotes = []; includedNoteIDs = []; requestedTranscriptCharacters = 0; includedTranscriptCharacters = 0
         guard profile.usesNotes, let noteSearch else {
             sendPrepared(configuration: configuration, action: action, notes: [], transcriptContext: transcriptContext,
@@ -389,7 +437,7 @@ final class ConversationModel {
             generationWork[prompt.id] = GenerationWork(meetingID: parent.id, chatID: user.subchatID, task: task)
         } catch { status = (error as? ProviderError)?.localizedDescription ?? "Не удалось подготовить вопрос." }
     }
-    func cancel() {
+    func cancel(retainingPartialAnswer: Bool = true) {
         if retrieval != nil { retrieval?.cancel(); retrieval = nil; retrievalID = UUID(); isLoading = false; status = "Подготовка запроса отменена" }
         guard isGenerating else { return }
         generation?.cancel()
@@ -397,8 +445,12 @@ final class ConversationModel {
             lastLLMRequestMilliseconds = Self.milliseconds(startedAt.duration(to: .now))
             lastLLMRequestSucceeded = false
         }
+        let hasPartialAnswer = !streamingText.isEmpty
+        if !retainingPartialAnswer { streamingText = "" }
         finish(state: .cancelled, demo: messages.last?.isDemo ?? true)
-        status = "Ответ остановлен. Полученный текст сохранён в текущем поддиалоге."
+        status = retainingPartialAnswer && hasPartialAnswer
+            ? "Ответ остановлен. Полученный текст сохранён в текущем поддиалоге."
+            : "Ответ остановлен без сохранения частичного текста. Вопрос остался в истории."
     }
     func resetToEphemeralConversation() {
         cancel()
@@ -455,6 +507,7 @@ final class ConversationModel {
     }
     private func activate(_ next: Meeting, chats: [Subchat]) {
         guard let first = chats.first else { return }
+        let changedMeeting = meeting.id != next.id
         meeting = next; self.chats = chats; activeChatID = first.id
         messages = []; memory = [:]; memoryHidden = [:]; memoryClipped = [:]; memoryOrder = []
         hiddenMessageCount = 0; clippedMessageCount = 0
@@ -464,6 +517,7 @@ final class ConversationModel {
         contextWasTruncated = false; status = next.isEphemeral ? "История только в памяти" : "Встреча сохраняется локально"
         includedTranscriptCharacters = 0
         clearLatencyMetrics()
+        if changedMeeting { onMeetingActivated?(next.id) }
     }
     func clearLatencyMetrics() {
         if !isGenerating { generationStartedAt = nil }
@@ -499,7 +553,7 @@ final class ConversationModel {
             memoryClipped.removeValue(forKey: expired)
         }
     }
-    func exportCurrent(markdown: Bool = false) async throws -> Data {
+    func exportCurrent(markdown: Bool = false, transcriptTimeline: TranscriptTimeline? = nil) async throws -> Data {
         // Текущие сообщения берутся из памяти: экспорт не теряет ответ при сбое записи на диск.
         let snapshotMeeting = meeting; let snapshotChats = chats
         var history = memory; history[activeChatID] = messages
@@ -511,7 +565,8 @@ final class ConversationModel {
                 history[chat.id] = stored.sorted { $0.createdAt < $1.createdAt }
             }
         }
-        let archive = MeetingArchive(meeting: snapshotMeeting, subchats: snapshotChats, messages: snapshotChats.flatMap { history[$0.id] ?? [] })
+        let archive = MeetingArchive(meeting: snapshotMeeting, subchats: snapshotChats,
+                                     messages: snapshotChats.flatMap { history[$0.id] ?? [] }, transcriptTimeline: transcriptTimeline)
         if markdown { return Data(archive.markdown().utf8) }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]; encoder.dateEncodingStrategy = .iso8601
         return try encoder.encode(archive)

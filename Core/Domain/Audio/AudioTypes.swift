@@ -76,7 +76,7 @@ public struct AudioSegment: Identifiable, Sendable {
     }
 }
 
-public struct AudioPipelineConfiguration: Sendable {
+public struct AudioPipelineConfiguration: Codable, Equatable, Sendable {
     public var preRoll: Double = 4
     public var oneShot: Double = 20
     public var chunkSeconds: Double = 7
@@ -95,7 +95,7 @@ public struct AudioPipelineConfiguration: Sendable {
         result.micSilence = micSilence.isFinite ? min(5, max(0.5, micSilence)) : 0.5
         result.systemSilence = systemSilence.isFinite ? min(5, max(0.5, systemSilence)) : 1
         result.threshold = threshold.isFinite ? min(0.3, max(0.001, threshold)) : 0.015
-        result.minSpeech = min(1, max(0.05, minSpeech))
+        result.minSpeech = minSpeech.isFinite ? min(1, max(0.05, minSpeech)) : 0.15
         return result
     }
 }

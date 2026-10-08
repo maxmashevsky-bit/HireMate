@@ -19,13 +19,19 @@ final class TranscriptionModel {
     private(set) var liveDroppedCount = 0
     private(set) var suggestedQuestion: String?
     private(set) var transcriptEntries: [TranscriptEntry] = []
+    private(set) var meetingID: UUID?
+    private(set) var isLoadingHistory = false
+    private(set) var historyLoadFailed = false
+    private(set) var historyStatus = "Расшифровки хранятся только в памяти текущего разговора."
+    var unsavedTranscriptCount: Int { failedHistoryWrites.count }
+    var isSavingHistory: Bool { historySaveWorker != nil }
     private(set) var lastQueueWaitMilliseconds: Int?
     private(set) var lastFirstEventMilliseconds: Int?
     private(set) var lastRequestMilliseconds: Int?
     private(set) var lastRequestSucceeded: Bool?
     var includeRecentContext = false
     var compactedTranscriptCount: Int { timeline.compactedCount }
-    var isBusy: Bool { isRunning || isBatchRunning }
+    var isBusy: Bool { isRunning || isBatchRunning || isLoadingHistory }
     private var batchTask: Task<Void, Never>?
     private var batchID: UUID?
     private struct QueuedSegment {
@@ -48,6 +54,22 @@ final class TranscriptionModel {
     private let network: NetworkClient
     private let serviceFactory: ((ModelConfiguration) -> any TranscriptionService)?
     private let questionDetector: QuestionDetector
+    private let transcriptRepository: (any TranscriptRepository)?
+    private struct HistoryScope: Equatable {
+        let meetingID: UUID
+        let profile: ProfileID
+    }
+    private struct HistoryWrite {
+        let scope: HistoryScope
+        let timeline: TranscriptTimeline
+    }
+    private var historyScope: HistoryScope?
+    private var historyLoadID = UUID()
+    private var historyLoadTask: Task<Void, Never>?
+    private var historySaveWorker: Task<Void, Never>?
+    private var activeHistoryWriteID: UUID?
+    private var pendingHistoryWrites: [UUID: HistoryWrite] = [:]
+    private var failedHistoryWrites: [UUID: HistoryWrite] = [:]
     private var task: Task<Void, Never>?
     private var activeID: UUID?
     private struct CompletedRequest: Equatable {
@@ -61,19 +83,119 @@ final class TranscriptionModel {
     private var completedRequest: CompletedRequest?
     init(secrets: any SecureSecretStore, network: NetworkClient,
          serviceFactory: ((ModelConfiguration) -> any TranscriptionService)? = nil,
-         questionDetector: QuestionDetector = QuestionDetector()) {
+         questionDetector: QuestionDetector = QuestionDetector(),
+         transcriptRepository: (any TranscriptRepository)? = nil) {
         self.secrets = secrets; self.network = network; self.serviceFactory = serviceFactory
         self.questionDetector = questionDetector
+        self.transcriptRepository = transcriptRepository
     }
 
     func start(segment: AudioSegment, configuration: ModelConfiguration, vocabulary: [String]) {
-        guard !isBusy, !isLiveEnabled else { return }
+        guard !isBusy, !isLiveEnabled, canAcceptHistory else { return }
         perform(segment: segment, configuration: configuration, vocabulary: vocabulary, requestedLanguage: language, consent: remoteConsent)
+    }
+
+    func activateMeeting(_ id: UUID, profile: ProfileID? = nil, persisted: Bool = false) {
+        let nextScope = persisted && transcriptRepository != nil ? profile.map { HistoryScope(meetingID: id, profile: $0) } : nil
+        guard meetingID != id || historyScope != nextScope else { return }
+        reset()
+        meetingID = id; historyScope = nextScope
+        status = "Выберите аудиофрагмент для текущей встречи."
+        historyStatus = nextScope == nil ? "Расшифровки хранятся только в памяти текущего разговора." : "Восстановление локальной истории…"
+        if let nextScope { loadHistory(nextScope) }
+    }
+
+    private var canAcceptHistory: Bool {
+        guard !historyLoadFailed else {
+            status = "Сначала повторите загрузку истории расшифровок, чтобы не перезаписать прежние данные."
+            return false
+        }
+        guard let scope = historyScope else { return true }
+        var waiting = Set(pendingHistoryWrites.keys).union(failedHistoryWrites.keys)
+        if let activeHistoryWriteID { waiting.insert(activeHistoryWriteID) }
+        guard waiting.count < 8 || waiting.contains(scope.meetingID) else {
+            status = "Есть несохранённые расшифровки восьми встреч. Повторите сохранение перед новым распознаванием."
+            return false
+        }
+        return true
+    }
+
+    private func loadHistory(_ scope: HistoryScope) {
+        guard let repository = transcriptRepository else { return }
+        historyLoadTask?.cancel()
+        let id = UUID(); historyLoadID = id; isLoadingHistory = true; historyLoadFailed = false
+        let pendingSaves = historySaveWorker
+        historyLoadTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if historyLoadID == id { isLoadingHistory = false; historyLoadTask = nil } }
+            do {
+                await pendingSaves?.value
+                try Task.checkCancellation()
+                let restored: TranscriptTimeline
+                if let unsaved = failedHistoryWrites[scope.meetingID], unsaved.scope == scope { restored = unsaved.timeline }
+                else { restored = try await repository.transcriptTimeline(meetingID: scope.meetingID, profile: scope.profile) }
+                try Task.checkCancellation()
+                guard historyLoadID == id, historyScope == scope else { return }
+                timeline = restored; transcriptEntries = restored.entries
+                historyStatus = failedHistoryWrites[scope.meetingID] == nil
+                    ? "Локальная история восстановлена. Сохраняются последние 50 реплик и ограниченная сводка."
+                    : "Восстановлена копия из памяти: запись на диск не завершена."
+            } catch is CancellationError { }
+            catch {
+                guard historyLoadID == id, historyScope == scope else { return }
+                historyLoadFailed = true
+                historyStatus = "Не удалось загрузить историю. Распознавание приостановлено; повторите загрузку."
+            }
+        }
+    }
+
+    func retryHistoryLoad() {
+        guard !isBusy, historyLoadFailed, let scope = historyScope else { return }
+        loadHistory(scope)
+    }
+
+    private func queueHistorySave() {
+        guard let scope = historyScope, transcriptRepository != nil, !historyLoadFailed else { return }
+        pendingHistoryWrites[scope.meetingID] = HistoryWrite(scope: scope, timeline: timeline)
+        historyStatus = "Сохранение расшифровок на этом Mac…"
+        startHistorySaveWorker()
+    }
+    private func startHistorySaveWorker() {
+        guard historySaveWorker == nil, let repository = transcriptRepository else { return }
+        historySaveWorker = Task { [weak self] in
+            guard let self else { return }
+            while let write = pendingHistoryWrites.values.first {
+                pendingHistoryWrites.removeValue(forKey: write.scope.meetingID)
+                activeHistoryWriteID = write.scope.meetingID
+                do {
+                    try await repository.saveTranscriptTimeline(write.timeline, meetingID: write.scope.meetingID, profile: write.scope.profile)
+                    failedHistoryWrites.removeValue(forKey: write.scope.meetingID)
+                    if historyScope == write.scope { historyStatus = "Расшифровки сохранены локально. Последние 50 реплик и ограниченная сводка." }
+                } catch LocalStoreError.missingRecord {
+                    // Удалённая встреча не воссоздаётся поздним сохранением.
+                    failedHistoryWrites.removeValue(forKey: write.scope.meetingID)
+                    if historyScope == write.scope { historyStatus = "Встреча больше не доступна для сохранения расшифровок." }
+                } catch {
+                    failedHistoryWrites[write.scope.meetingID] = write
+                    if historyScope == write.scope { historyStatus = "Расшифровки остались в памяти. Повторите сохранение перед выходом." }
+                }
+            }
+            activeHistoryWriteID = nil
+            historySaveWorker = nil
+        }
+    }
+    func retryHistorySaves() {
+        guard !isSavingHistory else { return }
+        for (id, write) in failedHistoryWrites { pendingHistoryWrites[id] = write }
+        startHistorySaveWorker()
+    }
+    func waitForPendingHistoryWrites() async {
+        while let worker = historySaveWorker { await worker.value }
     }
 
     // Снимок очереди: новые аудиофрагменты не добавляются без следующего действия пользователя.
     func startBatch(segments: [AudioSegment], configuration: ModelConfiguration, vocabulary: [String], remoteBatchConsent: Bool = false) {
-        guard !isBusy, !isLiveEnabled else { return }
+        guard !isBusy, !isLiveEnabled, canAcceptHistory else { return }
         guard !segments.isEmpty, segments.count <= 6,
               segments.allSatisfy({ $0.duration.isFinite && $0.duration > 0 && $0.duration <= 60 && $0.samples.count <= 960_000 }) else {
             status = "Очередь допускает от 1 до 6 фрагментов длительностью до 60 секунд каждый."; return
@@ -112,7 +234,7 @@ final class TranscriptionModel {
 
     @discardableResult
     func enableLive(configuration: ModelConfiguration, vocabulary: [String], remoteConsent: Bool = false) -> Bool {
-        guard !isBusy, !isLiveEnabled else { return false }
+        guard !isBusy, !isLiveEnabled, canAcceptHistory else { return false }
         guard configuration.mode == .demo || remoteConsent else {
             status = "Подтвердите автоматическую отправку новых аудиофрагментов этому провайдеру."
             return false
@@ -180,8 +302,9 @@ final class TranscriptionModel {
     func dismissSuggestedQuestion() { suggestedQuestion = nil }
 
     func clearTranscript() {
-        guard !isBusy else { return }
+        guard !isBusy, canAcceptHistory else { return }
         timeline.clear(); transcriptEntries = []; suggestedQuestion = nil
+        queueHistorySave()
     }
 
     func recentTranscriptContext(maximumCharacters: Int = 4_000) -> String {
@@ -190,6 +313,11 @@ final class TranscriptionModel {
 
     func contextForRequest() -> String {
         includeRecentContext ? timeline.contextWindow(maximumCharacters: 4_000) : ""
+    }
+
+    func timelineForExport(meetingID expectedID: UUID) throws -> TranscriptTimeline {
+        guard meetingID == expectedID, !isLoadingHistory, !historyLoadFailed else { throw LocalStoreError.unavailable }
+        return timeline
     }
 
     private func stopLive(clearStatus: Bool) {
@@ -202,6 +330,7 @@ final class TranscriptionModel {
 
     private func perform(segment: AudioSegment, configuration: ModelConfiguration, vocabulary: [String],
                          requestedLanguage: TranscriptionLanguage, consent: Bool, queueWaitMilliseconds: Int? = nil) {
+        guard canAcceptHistory else { return }
         if configuration.mode == .remote && !consent { status = "Подтвердите отправку выбранного аудиофрагмента."; return }
         let request = CompletedRequest(segment: segment.id, language: requestedLanguage,
                                        provider: configuration.mode.rawValue, model: configuration.transcriptionModel,
@@ -243,6 +372,7 @@ final class TranscriptionModel {
                 completedRequest = request
                 result = finalResult; editableText = finalResult.text; partialText = ""
                 timeline.append(finalResult); transcriptEntries = timeline.entries
+                queueHistorySave()
                 if let candidate = questionDetector.candidate(from: finalResult) { suggestedQuestion = candidate }
                 status = finalResult.isDemo ? "Учебный образец. Это не расшифровка вашей записи." : "Распознано. Исправьте термины перед использованием."
                 lastRequestMilliseconds = Self.milliseconds(startedAt.duration(to: .now)); lastRequestSucceeded = true
@@ -272,5 +402,11 @@ final class TranscriptionModel {
         lastRequestMilliseconds = nil
         lastRequestSucceeded = nil
     }
-    func reset() { cancel(); result = nil; editableText = ""; completedRequest = nil; remoteConsent = false; batchResults = []; liveDroppedCount = 0; suggestedQuestion = nil; timeline.clear(); transcriptEntries = []; includeRecentContext = false; clearLatencyMetrics() }
+    func reset() {
+        historyLoadID = UUID(); historyLoadTask?.cancel(); historyLoadTask = nil
+        isLoadingHistory = false; historyLoadFailed = false
+        cancel(); result = nil; editableText = ""; completedRequest = nil; remoteConsent = false
+        batchResults = []; liveDroppedCount = 0; suggestedQuestion = nil; timeline.clear(); transcriptEntries = []
+        includeRecentContext = false; clearLatencyMetrics()
+    }
 }

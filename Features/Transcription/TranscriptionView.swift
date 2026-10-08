@@ -29,7 +29,8 @@ struct TranscriptionView: View {
                     }
                 } else { Text("Сначала выделите вопрос или возьмите фрагмент из буфера в разделе «Звук».") }
                 Text(transcription.status).foregroundStyle(.secondary)
-                Button("Отменить распознавание и очередь") { transcription.cancel() }.disabled(!transcription.isBusy)
+                Button("Отменить распознавание и очередь") { transcription.cancel() }
+                    .disabled(!transcription.isRunning && !transcription.isBatchRunning && !transcription.isLiveEnabled)
             }
             Section("Очередь накопленных фрагментов") {
                 Text("До 6 фрагментов, по одному запросу за раз. Новые фрагменты не добавляются автоматически. При ошибке очередь останавливается.")
@@ -95,8 +96,21 @@ struct TranscriptionView: View {
                 Text("Передача текста в поле вопроса не запускает генерацию и не отправляет его в сеть.").font(.caption)
             }
             Section("Локальная хронология") {
-                Text("Только финальные реплики. Системный звук помечается как собеседник, микрофон — как Максим. Хранится до 50 реплик или 12 000 символов в памяти.")
+                Text("Только финальные реплики. Системный звук помечается как собеседник, микрофон — как Максим. Хранится до 50 реплик или 12 000 символов; старые реплики заменяются ограниченной дословной выжимкой.")
                     .font(.caption)
+                Text(transcription.historyStatus).font(.caption).foregroundStyle(.secondary)
+                if transcription.isLoadingHistory || transcription.isSavingHistory {
+                    ProgressView(transcription.isLoadingHistory ? "Загрузка истории" : "Сохранение истории")
+                }
+                if transcription.historyLoadFailed {
+                    Button("Повторить загрузку истории") { transcription.retryHistoryLoad() }
+                        .disabled(transcription.isBusy)
+                }
+                if transcription.unsavedTranscriptCount > 0 {
+                    Text("Не сохранены расшифровки встреч: \(transcription.unsavedTranscriptCount)").foregroundStyle(.orange)
+                    Button("Повторить сохранение расшифровок") { transcription.retryHistorySaves() }
+                        .disabled(transcription.isSavingHistory)
+                }
                 if transcription.compactedTranscriptCount > 0 {
                     Text("Старых реплик в локальной дословной выжимке: \(transcription.compactedTranscriptCount)")
                         .font(.caption).foregroundStyle(.secondary)
@@ -108,14 +122,14 @@ struct TranscriptionView: View {
                     }
                 }
                 Toggle("Добавлять последние реплики в следующий AI-запрос", isOn: $transcription.includeRecentContext)
-                    .disabled(transcription.transcriptEntries.isEmpty)
+                    .disabled(transcription.transcriptEntries.isEmpty || transcription.isLoadingHistory || transcription.historyLoadFailed)
                 if transcription.includeRecentContext {
                     Text("Будет добавлено до 4 000 символов. Перед отправкой действует общее подтверждение API в активном профиле. История остаётся недоверенными данными и не может менять системные правила.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Button("Очистить локальную хронологию", role: .destructive) {
                     transcription.clearTranscript()
-                }.disabled(transcription.isBusy || transcription.transcriptEntries.isEmpty)
+                }.disabled(transcription.isBusy || transcription.historyLoadFailed || (transcription.transcriptEntries.isEmpty && transcription.compactedTranscriptCount == 0))
             }
             if let duration = transcription.lastRequestMilliseconds {
                 Section("Последние локальные метрики STT") {

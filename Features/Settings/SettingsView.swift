@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import CopilotCore
 
@@ -13,25 +14,22 @@ struct SettingsView: View {
     @State private var quality = "CRF 18"
     @State private var bitrate = "192 kbps"
     @State private var hotkeySearch = ""
-    @State private var modelCycle = "Текущий провайдер"
+    @State private var editingHotkey: GlobalHotkeyService.Action?
+    @State private var editingModelSlot: ModelSlot?
     @State private var blocksMetaKeys = false
-    @State private var cursorEnabled = true
-    @State private var cursorProtection = true
-    @State private var interfaceOpacity = 1.0
-    @State private var customAccent = DesignTokens.accent
-    @State private var showQuickActions = true
-    @State private var messageOrder = "Новые снизу"
-    @State private var chatFontSize = 13.5
-    @State private var codeTheme = "GitHub Dark"
-    @State private var smartScroll = true
-    @State private var collapseGroups = true
-    @State private var compactActions = true
-    @State private var codeMagnifier = true
-    @State private var screenProtection = true
-    @State private var proxyURL = ""
+    @State private var editingQuickAction: QuickAction?
     @State private var disguiseName = "HireMate"
     @State private var disguiseIcon = "briefcase.fill"
     @State private var settingsSearch = ""
+    @State private var storageSnapshot: StorageSnapshot?
+    @State private var storageIsLoading = false
+    @State private var storageIssue: String?
+    private let storageInspector: any StorageInspecting
+
+    init(model: AppModel, storageInspector: any StorageInspecting = LocalStorageInspector()) {
+        self.model = model
+        self.storageInspector = storageInspector
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -58,6 +56,12 @@ struct SettingsView: View {
             .background(DesignTokens.canvas)
         }
         .onDisappear { secretInput = "" }
+        .sheet(item: $editingQuickAction) { action in
+            QuickActionEditor(store: model.quickActions, action: action)
+        }
+        .sheet(item: $editingModelSlot) { slot in
+            ModelSlotEditor(settings: model.providerSettings, slot: slot)
+        }
     }
 
     private var settingsSidebar: some View {
@@ -73,8 +77,8 @@ struct SettingsView: View {
             }
             Divider()
             VStack(spacing: 3) {
-                Button { } label: { Label("Выйти из аккаунта", systemImage: "rectangle.portrait.and.arrow.right").frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.plain)
-                Button { } label: { Label("Закрыть", systemImage: "power").frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.plain)
+                Label("Локальный режим", systemImage: "person.crop.circle").frame(maxWidth: .infinity, alignment: .leading).foregroundStyle(.secondary)
+                Button { NSApplication.shared.terminate(nil) } label: { Label("Завершить приложение", systemImage: "power").frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.plain)
             }.padding(14)
         }
         .frame(width: 206)
@@ -121,14 +125,15 @@ struct SettingsView: View {
 
     private var audioCapturePage: some View {
         @Bindable var audio = model.audio
+        let sessionBusy = audio.isRunning || audio.isStarting || audio.isStopping
         return VStack(spacing: 14) {
             HMPanel("Источник звука", subtitle: "Выберите, что попадёт в локальную расшифровку") {
                 Picker("Источник", selection: $audio.inputMode) { ForEach(AudioInputMode.allCases) { Text($0.title).tag($0) } }
                 Picker("Режим записи", selection: $audio.questionMode) { ForEach(AudioQuestionMode.allCases) { Text($0.title).tag($0) } }
-            }
+            }.disabled(sessionBusy)
             HMPanel("Схема записи") {
                 HStack(spacing: 10) {
-                    sourceStep("Буфер", "4 сек", "waveform.path", .blue)
+                    sourceStep("Буфер", "\(audio.configuration.preRoll.formatted(.number.precision(.fractionLength(0...1)))) сек", "waveform.path", .blue)
                     Image(systemName: "chevron.right").foregroundStyle(.secondary)
                     sourceStep("Старт / стоп", "вопрос", "bolt.fill", DesignTokens.accent)
                     Image(systemName: "chevron.right").foregroundStyle(.secondary)
@@ -137,44 +142,54 @@ struct SettingsView: View {
                     sourceStep("Отправка", "вручную", "paperplane", .orange)
                 }
                 HStack {
-                    Button(audio.isRunning ? "Остановить" : "Начать захват") {
-                        if audio.isRunning { Task { await audio.stop() } } else { audio.start() }
-                    }.buttonStyle(HMPrimaryButtonStyle()).disabled(!audio.consent)
+                    Button(audio.isStarting ? "Отменить подключение" : audio.isRunning ? "Остановить" : "Начать захват") {
+                        if audio.isRunning || audio.isStarting { Task { await audio.stop() } } else { audio.start() }
+                    }.buttonStyle(HMPrimaryButtonStyle())
+                        .disabled(audio.isStopping || audio.isClearing || (!sessionBusy && !audio.consent))
                     Toggle("Согласие участников получено", isOn: $audio.consent)
+                        .disabled(sessionBusy)
                 }
+                Text(audio.status).font(.caption).foregroundStyle(.secondary)
             }
             HMPanel("Микрофон и буфер") {
-                Picker("Микрофон", selection: .constant("По умолчанию")) { Text("По умолчанию") }
-                settingSlider("Длина буфера", value: $audio.configuration.preRoll, range: 0...15, suffix: "\(Int(audio.configuration.preRoll)) сек")
-                Toggle("Отправлять подготовленный снимок вместе со звуком", isOn: .constant(false))
+                LabeledContent("Микрофон", value: "Системное устройство ввода")
+                settingSlider("Длина буфера", value: $audio.configuration.preRoll, range: 0...15, suffix: "\(audio.configuration.preRoll.formatted(.number.precision(.fractionLength(0...1)))) сек")
+                Toggle("Отправлять подготовленный снимок вместе со звуком", isOn: .constant(false)).disabled(true)
+                Text("Источник, режим и параметры буфера сохраняются. Захват запускается вручную после согласия участников. Снимок можно приложить отдельно к вопросу.")
+                    .font(.caption).foregroundStyle(.secondary)
                 DisclosureGroup("Расширенные настройки") {
-                    settingSlider("One-Shot", value: $audio.configuration.oneShot, range: 5...60, suffix: "\(Int(audio.configuration.oneShot)) сек")
+                    settingSlider("One-Shot", value: $audio.configuration.oneShot, range: 5...60, suffix: "\(audio.configuration.oneShot.formatted(.number.precision(.fractionLength(0...1)))) сек")
                     settingSlider("Порог речи", value: $audio.configuration.threshold, range: 0.001...0.1, suffix: audio.configuration.threshold.formatted(.number.precision(.fractionLength(3))))
                 }
-            }
+            }.disabled(sessionBusy)
         }
     }
 
     private var recordingPage: some View {
         VStack(spacing: 14) {
             HMPanel("Запись интервью", subtitle: "Видео и два независимых аудиоканала") {
+                Text("Запись видеофайла пока не подключена. Эти параметры недоступны; звук для расшифровки запускается отдельно в разделе «Запись звука».")
+                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("Записывать интервью в файл", isOn: $recordingEnabled)
+                    .disabled(true)
                 Toggle("Системный звук", isOn: $recordSystemAudio)
+                    .disabled(true)
                 HStack {
                     Button(recordingEnabled ? "Остановить запись" : "Начать запись", systemImage: "record.circle") { recordingEnabled.toggle() }
-                        .buttonStyle(HMPrimaryButtonStyle())
-                    Button("Записать 5 секунд", systemImage: "waveform") {}
-                    Spacer(); HMStatusPill(text: recordingEnabled ? "Запись идёт" : "Готово", color: recordingEnabled ? .red : DesignTokens.success)
+                        .buttonStyle(HMPrimaryButtonStyle()).disabled(true)
+                    Button("Записать 5 секунд", systemImage: "waveform") {}.disabled(true)
+                    Spacer(); HMStatusPill(text: "Не подключено", color: .secondary)
                 }
-            }
+            }.disabled(true)
             HMPanel("Параметры файла") {
                 Picker("Частота кадров", selection: $fps) { ForEach(["24 fps", "30 fps", "60 fps"], id: \.self) { Text($0) } }
                 Picker("Максимальное разрешение", selection: $resolution) { ForEach(["1080p", "1440p", "4K"], id: \.self) { Text($0) } }
                 Picker("Качество видео", selection: $quality) { ForEach(["CRF 18", "CRF 21", "CRF 24"], id: \.self) { Text($0) } }
                 Picker("Битрейт аудио", selection: $bitrate) { ForEach(["128 kbps", "192 kbps", "256 kbps"], id: \.self) { Text($0) } }
-            }
+            }.disabled(true)
             HMPanel("Папка записи") {
-                HStack { Text("~/Library/Application Support/HireMate/Recordings").font(.system(.caption, design: .monospaced)); Spacer(); Button("Выбрать", systemImage: "folder") {}; Button("Сбросить") {} }
+                Text(AppStoragePaths.standard.directory(for: .interviews).path).font(.system(.caption, design: .monospaced))
+                Text("Папку приложения можно открыть в разделе «Хранилище».").font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -203,45 +218,105 @@ struct SettingsView: View {
     }
 
     private var hotkeysPage: some View {
-        VStack(spacing: 14) {
+        @Bindable var preferences = model.overlay.preferences
+        return VStack(spacing: 14) {
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Поиск по названию…", text: $hotkeySearch).textFieldStyle(.plain)
             }.padding(10).background(DesignTokens.elevated, in: RoundedRectangle(cornerRadius: 9))
+            HMPanel("Управление сочетаниями") {
+                Toggle("Глобальные горячие клавиши", isOn: $preferences.shortcutsEnabled)
+                Picker("Набор сочетаний", selection: $preferences.shortcutPreset) {
+                    ForEach(ShortcutPreset.allCases) { Text($0.title).tag($0) }
+                }
+                Text("\(model.overlay.hotkeys.registeredCount) зарегистрировано")
+                    .font(.caption).foregroundStyle(.secondary)
+                ForEach(model.overlay.hotkeys.issues, id: \.self) { issue in
+                    Text(issue).font(.caption).foregroundStyle(.orange)
+                }
+            }
             HMPanel("Горячие клавиши", subtitle: "Нажмите сочетание справа, чтобы переназначить команду") {
                 ForEach(filteredHotkeys, id: \.rawValue) { action in
-                    shortcutRow(action.title, model.overlay.preferences.shortcutLabel(for: action))
+                    HStack {
+                        Text(action.title)
+                        Spacer()
+                        Button { editingHotkey = action } label: {
+                            Text(preferences.shortcutLabel(for: action))
+                                .font(.system(.caption, design: .monospaced))
+                                .padding(.horizontal, 8).padding(.vertical, 5)
+                                .background(DesignTokens.elevated, in: RoundedRectangle(cornerRadius: 6))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Изменить сочетание: \(action.title)")
+                        .popover(isPresented: Binding(
+                            get: { editingHotkey == action },
+                            set: { if !$0 { editingHotkey = nil } }
+                        )) {
+                            VStack(alignment: .leading, spacing: 14) {
+                                Text(action.title).font(.headline)
+                                HotkeyBindingEditor(controller: model.overlay, action: action)
+                                Button("Готово") { editingHotkey = nil }
+                                    .frame(maxWidth: .infinity, alignment: .trailing)
+                            }.padding(18).frame(width: 360)
+                        }
+                    }
                     if action != filteredHotkeys.last { Divider() }
+                }
+                if filteredHotkeys.isEmpty {
+                    Text("Команды не найдены. Измените поисковый запрос.")
+                        .foregroundStyle(.secondary)
                 }
                 Button("Сбросить всё по умолчанию", systemImage: "arrow.counterclockwise") {
                     model.overlay.preferences.resetAllHotkeys(); model.overlay.configureHotkeys()
                 }.frame(maxWidth: .infinity)
             }
         }
+        .onChange(of: preferences.shortcutsEnabled) { _, _ in model.overlay.configureHotkeys() }
+        .onChange(of: preferences.shortcutPreset) { _, _ in model.overlay.configureHotkeys() }
     }
 
     private var modelsPage: some View {
-        VStack(spacing: 14) {
+        let settings = model.providerSettings
+        let busy = model.isGenerating || model.conversation.isLoading
+        return VStack(spacing: 14) {
             HMPanel("Переключение моделей") {
-                Picker("Какие модели переключать", selection: $modelCycle) { Text("Текущий провайдер"); Text("Все подключённые") }
-                shortcutRow("Горячая клавиша", "Отключено")
+                LabeledContent("Текущий API", value: settings.configuration.mode == .demo ? "Демо без сети" : settings.configuration.baseURL)
+                LabeledContent("Модель ответа", value: settings.configuration.mode == .demo ? "Локальный учебный пример" : settings.configuration.textModel)
+                shortcutRow("Следующий модельный слот", model.overlay.preferences.shortcutLabel(for: .cycleModels))
+                Button("Следующий настроенный слот", systemImage: "arrow.triangle.2.circlepath") { settings.cycleModelSlot() }
+                    .disabled(busy || !settings.modelSlots.keys.contains(where: settings.isSlotAvailable))
+                Text("Переключаются слоты текущего API. Выбор модели сохраняется и действует на следующий запрос. Адрес API, ключ и настройки распознавания остаются текущими.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             HMPanel("Слоты моделей") {
                 ForEach(1...5, id: \.self) { slot in
                     HStack {
                         Text("Слот \(slot)").frame(width: 64, alignment: .leading)
-                        Picker("Модель", selection: .constant(slot == 1 ? model.providerSettings.configuration.textModel : "Модель не выбрана")) {
-                            Text(model.providerSettings.configuration.textModel).tag(model.providerSettings.configuration.textModel)
-                            Text("Модель не выбрана").tag("Модель не выбрана")
-                            Text("Локальная демо-модель").tag("Локальная демо-модель")
-                        }.labelsHidden()
-                        HMStatusPill(text: slot == 1 ? "Активно" : "Отключено", color: slot == 1 ? DesignTokens.success : .red)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(settings.modelSlots[slot]?.name ?? "Не настроен").font(.callout.weight(.semibold))
+                            if let preset = settings.modelSlots[slot] {
+                                Text(preset.model).font(.caption).foregroundStyle(.secondary)
+                                if !settings.isSlotAvailable(slot) { Text("Настроен для другого API").font(.caption).foregroundStyle(.secondary) }
+                            }
+                        }
+                        Spacer()
+                        if settings.activeSlotNumber == slot { HMStatusPill(text: "Выбрано", color: DesignTokens.success) }
+                        Button("Выбрать") { settings.activateModelSlot(slot) }
+                            .disabled(busy || !settings.isSlotAvailable(slot))
+                        Button("Настроить") {
+                            editingModelSlot = settings.modelSlots[slot] ?? ModelSlot(number: slot, name: "Модель \(slot)",
+                                model: settings.configuration.textModel, supportsVision: settings.configuration.visionEnabled, providerIdentity: "")
+                        }.disabled(busy || settings.configuration.mode != .remote || (try? settings.configuration.modelSlotProviderIdentity()) == nil)
+                        Button("Очистить", systemImage: "xmark.circle") { settings.removeModelSlot(slot) }
+                            .disabled(busy || settings.modelSlots[slot] == nil)
                     }
                 }
+                if !settings.message.isEmpty { Text(settings.message).font(.caption).foregroundStyle(.secondary) }
             }
-            HMPanel("Каталог моделей", subtitle: "Модели сгруппированы по подключённым провайдерам") {
+            HMPanel("Доступность моделей", subtitle: "Имена и возможности моделей задаются по документации вашего API") {
                 providerRow("Демонстрационный режим", "Доступен локально", true)
-                providerRow("OpenAI-совместимый API", model.providerSettings.configuration.baseURL, model.providerSettings.configuration.mode == .remote)
+                Text("Каталог провайдера автоматически не загружается. Для слотов сначала укажите собственный API в разделе «Система».")
+                    .font(.caption).foregroundStyle(.secondary)
                 Button("Настроить провайдера", systemImage: "slider.horizontal.3") { pane = .system }
             }
         }
@@ -251,16 +326,17 @@ struct SettingsView: View {
         VStack(spacing: 14) {
             HMPanel("Блокировать одиночные meta-клавиши", subtitle: "Комбинации с обычными клавишами продолжают работать") {
                 Toggle("Включить блокировку", isOn: $blocksMetaKeys)
+                    .disabled(true)
                 HStack(spacing: 12) {
                     ForEach(["Control", "Shift", "Option", "Command"], id: \.self) { key in
                         Text(key).font(.caption.weight(.semibold)).padding(.horizontal, 14).padding(.vertical, 9)
                             .background(DesignTokens.elevated, in: RoundedRectangle(cornerRadius: 8))
                     }
                 }
-                HMStatusPill(text: blocksMetaKeys ? "Блокировка включена" : "Выключено", color: blocksMetaKeys ? DesignTokens.success : .secondary)
+                HMStatusPill(text: "Не поддерживается в текущей сборке", color: .secondary)
             }
             HMPanel("Как работает фильтр") {
-                HStack { Image(systemName: "keyboard").font(.largeTitle).foregroundStyle(DesignTokens.accent); Text("Одиночное нажатие выбранной клавиши не передаётся системе. Сочетания остаются доступными для команд приложения.").foregroundStyle(.secondary) }
+                HStack { Image(systemName: "keyboard").font(.largeTitle).foregroundStyle(DesignTokens.accent); Text("Фильтр клавиш не подключён. Приложение не блокирует одиночные системные клавиши; глобальные сочетания настраиваются отдельно.").foregroundStyle(.secondary) }
             }
         }
     }
@@ -268,8 +344,9 @@ struct SettingsView: View {
     private var cursorPage: some View {
         VStack(spacing: 14) {
             HMPanel("Виртуальный курсор при снимке области") {
-                Toggle("Автоматически включать виртуальный курсор", isOn: $cursorEnabled)
-                Picker("Область", selection: .constant("Экран")) { Text("Экран"); Text("Выбор области") }
+                Toggle("Автоматически включать виртуальный курсор", isOn: .constant(false)).disabled(true)
+                Text("Виртуальный курсор не подключён. Для снимка области используется просмотр и обрезка захваченного изображения.").font(.caption).foregroundStyle(.secondary)
+                Picker("Область", selection: .constant("Экран")) { Text("Экран"); Text("Выбор области") }.disabled(true)
                 ZStack {
                     RoundedRectangle(cornerRadius: 12).fill(DesignTokens.elevated).frame(height: 190)
                     RoundedRectangle(cornerRadius: 8).stroke(DesignTokens.accent, lineWidth: 2).frame(width: 170, height: 110)
@@ -278,42 +355,56 @@ struct SettingsView: View {
                 }
             }
             HMPanel("Защита курсора") {
-                Toggle("Защита курсора всегда включена", isOn: $cursorProtection)
-                Picker("Курсор", selection: .constant("Стрелка")) { Text("Стрелка"); Text("Точка"); Text("Скрытый") }
-                HStack { Text("Панель ввода"); Spacer(); Button("Показать") {} }
+                Toggle("Защита курсора", isOn: .constant(false)).disabled(true)
+                Text("Сохранение вида курсора другого приложения не поддерживается. Пропуск кликов рабочего окна можно переключать независимо.").font(.caption).foregroundStyle(.secondary)
+                Picker("Курсор", selection: .constant("Стрелка")) { Text("Стрелка"); Text("Точка"); Text("Скрытый") }.disabled(true)
+                HStack { Text("Панель ввода"); Spacer(); Button("Показать") { model.overlay.focusInput() } }
             }
         }
     }
 
     private var quickActionsPage: some View {
-        VStack(spacing: 14) {
-            HMPanel("Пять быстрых действий", subtitle: "Перетащите элементы, чтобы изменить порядок") {
+        @Bindable var preferences = model.overlay.preferences
+        return VStack(spacing: 14) {
+            HMPanel("Пять быстрых действий", subtitle: "Настройка каждого слота сохраняется локально") {
                 ForEach(model.quickActions.actions) { action in
                     HStack(spacing: 10) {
                         Image(systemName: "line.3.horizontal").foregroundStyle(.secondary)
                         Image(systemName: action.slot == 1 ? "text.magnifyingglass" : "bolt.circle")
                             .frame(width: 28, height: 28).background(DesignTokens.accentSoft, in: Circle()).foregroundStyle(DesignTokens.accent)
                         VStack(alignment: .leading) { Text(action.name).font(.callout.weight(.semibold)); Text(action.profileID.title).font(.caption).foregroundStyle(.secondary) }
-                        Spacer(); Text("⌘ \(action.slot)").font(.system(.caption, design: .monospaced)); Button("Настроить") {}
+                        Spacer(); Text(preferences.quickActionShortcutLabel(slot: action.slot)).font(.system(.caption, design: .monospaced)); Button("Настроить") { editingQuickAction = action }
                     }.padding(8).background(DesignTokens.elevated.opacity(0.55), in: RoundedRectangle(cornerRadius: 9))
                 }
             }
             HMPanel("Скрытые элементы") {
-                Label("Перетащите сюда действие, чтобы скрыть", systemImage: "eye.slash")
-                    .frame(maxWidth: .infinity, minHeight: 70).foregroundStyle(.secondary)
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(.secondary.opacity(0.4), style: StrokeStyle(dash: [6])))
+                Text("Скрытие отдельных действий ещё не подключено. Ниже можно скрыть всю строку быстрых действий.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            HMPanel { Toggle("Показывать быстрые действия над полем ввода", isOn: $showQuickActions) }
+            HMPanel { Toggle("Показывать быстрые действия над полем ввода", isOn: $preferences.showsQuickActions) }
         }
     }
 
     private var appearancePage: some View {
-        VStack(spacing: 14) {
+        @Bindable var preferences = model.overlay.preferences
+        return VStack(spacing: 14) {
             HMPanel("Тема оформления") {
                 Picker("Тема", selection: $model.theme) { ForEach(AppTheme.allCases) { Text($0.title).tag($0) } }
-                ColorPicker("Акцентный цвет", selection: $customAccent, supportsOpacity: false)
-                HStack { ForEach([Color.orange, .blue, .purple, .green, .pink, .cyan], id: \.self) { color in Circle().fill(color).frame(width: 24, height: 24).overlay(Circle().stroke(.white.opacity(color == customAccent ? 1 : 0), lineWidth: 2)).onTapGesture { customAccent = color } } }
-                settingSlider("Непрозрачность интерфейса", value: $interfaceOpacity, range: 0.35...1, suffix: "\(Int(interfaceOpacity * 100))%")
+                ColorPicker("Акцентный цвет", selection: accentBinding, supportsOpacity: false)
+                HStack {
+                    ForEach(accentOptions, id: \.color) { option in
+                        Button { model.preferences.accent = option.color } label: {
+                            Circle().fill(DesignTokens.color(for: option.color)).frame(width: 24, height: 24)
+                                .overlay(Circle().stroke(.primary.opacity(model.preferences.accent == option.color ? 1 : 0), lineWidth: 2))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Акцент: \(option.name)")
+                        .accessibilityAddTraits(model.preferences.accent == option.color ? .isSelected : [])
+                    }
+                }
+                Button("Цвет по умолчанию") { model.preferences.accent = .defaultColor }
+                    .disabled(model.preferences.accent == .defaultColor)
+                settingSlider("Непрозрачность окна встречи", value: $preferences.opacity, range: 0.35...1, suffix: "\(Int(preferences.opacity * 100))%")
             }
             HMPanel("Предпросмотр") {
                 ZStack {
@@ -322,36 +413,121 @@ struct SettingsView: View {
                         HStack { Image(systemName: "sparkles"); Image(systemName: "waveform"); Spacer(); HMStatusPill(text: "Активно", color: customAccent) }
                         Text("Транскрипция звука").font(.caption).foregroundStyle(.secondary)
                         Text("Разделяю задачу на шаги и формирую краткий ответ.").font(.callout)
-                    }.padding(18).frame(width: 430).background(DesignTokens.card.opacity(interfaceOpacity), in: RoundedRectangle(cornerRadius: 14))
+                    }.padding(18).frame(width: 430).background(DesignTokens.card.opacity(preferences.opacity), in: RoundedRectangle(cornerRadius: 14))
                 }.frame(height: 230).clipShape(RoundedRectangle(cornerRadius: 12))
             }
+            HMPanel("Перемещение и размер окна", subtitle: "Шаги для горячих клавиш и кнопок рабочего окна, в пунктах macOS") {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack { Text("Шаг перемещения"); Spacer(); Text("\(Int(preferences.moveStep)) пт").monospacedDigit() }
+                    Slider(value: $preferences.moveStep, in: 10...200, step: 5)
+                        .accessibilityLabel("Шаг перемещения")
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack { Text("Шаг изменения размера"); Spacer(); Text("\(Int(preferences.resizeStep)) пт").monospacedDigit() }
+                    Slider(value: $preferences.resizeStep, in: 10...200, step: 5)
+                        .accessibilityLabel("Шаг изменения размера")
+                }
+                Text("Параметры сохраняются автоматически. Окно остаётся в видимой области дисплея.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            HMPanel("Индикатор состояния окна") {
+                Toggle("Показывать индикатор", isOn: $preferences.showsStatusIndicator)
+                Picker("Расположение", selection: $preferences.statusCorner) {
+                    ForEach(OverlayStatusCorner.allCases) { Text($0.title).tag($0) }
+                }.disabled(!preferences.showsStatusIndicator)
+                Text("Показывает запрос исключения из захвата, доступность защиты курсора, режим кликов и количество подключённых дисплеев. Настройки сохраняются.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
+        .onChange(of: preferences.opacity) { _, _ in model.overlay.applyOpacity() }
     }
 
     private var meetingPanelPage: some View {
-        VStack(spacing: 14) {
+        @Bindable var preferences = model.overlay.preferences
+        return VStack(spacing: 14) {
+            HStack {
+                Text("Перетащите инструмент между панелями или выберите место в его меню.").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Сбросить") { preferences.resetPanelLayout() }
+            }
             HMPanel("Предпросмотр панели встречи") {
-                HStack { Image(systemName: "sparkles").foregroundStyle(DesignTokens.accent); Image(systemName: "mic"); Spacer(); Text(model.providerSettings.configuration.textModel); Image(systemName: "note.text"); Image(systemName: "house") }
+                panelLayoutZone(.header)
                 Divider()
                 Text("Сообщение").font(.caption).foregroundStyle(.secondary)
                 Text("Как бы вы спроектировали этот сервис?").padding(10).background(DesignTokens.elevated, in: RoundedRectangle(cornerRadius: 8))
-                HStack { ForEach(["Анализ экрана", "Что сказать", "Резюме"], id: \.self) { Button($0) {} }; Spacer(); Button { } label: { Image(systemName: "arrow.up.circle.fill") } }
-                HStack { ForEach(["bold", "textformat", "bolt", "camera", "note.text", "speaker.wave.2"], id: \.self) { Image(systemName: $0).frame(width: 28, height: 28).background(DesignTokens.elevated, in: Circle()) } }
-                Label("Скрытые элементы", systemImage: "eye.slash").frame(maxWidth: .infinity, minHeight: 62)
-                    .overlay(RoundedRectangle(cornerRadius: 9).stroke(.secondary.opacity(0.4), style: StrokeStyle(dash: [5])))
+                if preferences.showsQuickActions {
+                    HStack {
+                        ForEach(model.quickActions.actions.filter { $0.profileID == model.profile }) {
+                            Text($0.name).font(.caption).padding(8).background(DesignTokens.elevated, in: RoundedRectangle(cornerRadius: 8))
+                        }
+                    }
+                }
+                Text("Сообщение или вопрос…").foregroundStyle(.secondary)
+                panelLayoutZone(.input)
             }
-            HMPanel { Toggle("Показывать быстрые действия", isOn: $showQuickActions) }
+            HMPanel { panelLayoutZone(.hidden) }
+            HMPanel { Toggle("Показывать быстрые действия", isOn: $preferences.showsQuickActions) }
         }
+    }
+
+    private func panelLayoutZone(_ zone: MeetingPanelZone) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(zone.title).font(.caption.bold()).foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(model.overlay.preferences.panelLayout[zone]) { tool in
+                        Menu {
+                            ForEach(MeetingPanelZone.allCases) { destination in
+                                Button(destination.title) { model.overlay.preferences.movePanelTool(tool, to: destination) }
+                            }
+                        } label: {
+                            Label(tool.title, systemImage: tool.icon).font(.caption)
+                                .padding(8).background(DesignTokens.elevated, in: RoundedRectangle(cornerRadius: 8))
+                        }
+                        .menuStyle(.borderlessButton).fixedSize()
+                        .draggable(tool.rawValue)
+                        .dropDestination(for: String.self) { values, _ in movePanelTool(values, to: zone, before: tool) }
+                        .help("Перетащите инструмент или выберите другую панель")
+                    }
+                    if model.overlay.preferences.panelLayout[zone].isEmpty {
+                        Label("Перетащите инструмент сюда", systemImage: zone == .hidden ? "eye.slash" : "plus")
+                            .font(.caption).foregroundStyle(.secondary).padding(8)
+                    }
+                }.padding(6)
+            }.frame(minHeight: 52)
+        }
+        .padding(8).frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(.secondary.opacity(0.4), style: StrokeStyle(dash: [5])))
+        .dropDestination(for: String.self) { values, _ in movePanelTool(values, to: zone) }
+    }
+
+    private func movePanelTool(_ values: [String], to zone: MeetingPanelZone, before target: MeetingPanelTool? = nil) -> Bool {
+        guard values.count == 1, let value = values.first, let tool = MeetingPanelTool(rawValue: value) else { return false }
+        model.overlay.preferences.movePanelTool(tool, to: zone, before: target)
+        return true
     }
 
     private var teleprompterPage: some View {
         @Bindable var settings = model.overlay.teleprompter.settings
+        @Bindable var colors = settings.appearance
         return VStack(spacing: 14) {
             HMPanel("Текст телесуфлёра") {
                 TextEditor(text: $settings.text).frame(minHeight: 120)
+                HStack {
+                    Text("\(settings.words.isEmpty ? 0 : settings.activeWordIndex + 1) / \(settings.words.count) слов").font(.caption).monospacedDigit()
+                    Spacer()
+                    Button(settings.isPlaying ? "Пауза" : "Продолжить") { settings.togglePlayback() }.disabled(settings.words.isEmpty)
+                    Button("Сначала") { settings.reset() }
+                }
                 ZStack {
-                    RoundedRectangle(cornerRadius: 10).fill(DesignTokens.elevated).frame(height: 150)
-                    VStack { Text("экрана").foregroundStyle(.secondary); Text("во"); Text("время").font(.title.bold()) }.font(.title2)
+                    RoundedRectangle(cornerRadius: 10).fill(DesignTokens.color(for: colors.background)).frame(height: 150)
+                    HStack(spacing: 10) {
+                        ForEach(Array(settings.words.enumerated()).dropFirst(max(0, settings.activeWordIndex - 2)).prefix(5), id: \.offset) { index, word in
+                            Text(word).font(.system(size: min(34, settings.fontSize), weight: index == settings.activeWordIndex ? .bold : .regular))
+                                .foregroundStyle(DesignTokens.color(for: index == settings.activeWordIndex ? colors.active : colors.neighbor))
+                        }
+                        if settings.words.isEmpty { Text("Введите текст для предпросмотра").foregroundStyle(DesignTokens.color(for: colors.neighbor)) }
+                    }.padding(12).frame(maxWidth: .infinity).clipped()
                 }
                 Picker("Источник", selection: $settings.source) { ForEach(TeleprompterContentSource.allCases) { Text($0.title).tag($0) } }
                 Button(model.overlay.teleprompter.isVisible ? "Скрыть телесуфлёр" : "Показать телесуфлёр", systemImage: "text.viewfinder") { model.overlay.teleprompter.toggle() }.buttonStyle(HMPrimaryButtonStyle())
@@ -361,28 +537,49 @@ struct SettingsView: View {
                 settingSlider("Размер текста", value: $settings.fontSize, range: 18...72, suffix: "\(Int(settings.fontSize)) пт")
                 settingSlider("Скорость", value: $settings.speed, range: 30...300, suffix: "\(Int(settings.speed)) сл/мин")
                 Picker("Расположение", selection: $settings.position) { ForEach(TeleprompterPosition.allCases) { Text($0.title).tag($0) } }
+                HMColorPicker(title: "Цвет фона", value: $colors.background)
+                HMColorPicker(title: "Соседние слова", value: $colors.neighbor)
+                HMColorPicker(title: "Активное слово", value: $colors.active)
+                Button("Сбросить цвета") { colors.reset() }
             }
         }
     }
 
     private var chatPage: some View {
-        VStack(spacing: 14) {
+        @Bindable var preferences = model.overlay.preferences
+        @Bindable var uiPreferences = model.preferences
+        return VStack(spacing: 14) {
             HMPanel("Отображение сообщений") {
-                Picker("Порядок сообщений", selection: $messageOrder) { Text("Новые снизу"); Text("Новые сверху") }
-                settingSlider("Размер текста сообщений", value: $chatFontSize, range: 11...22, suffix: chatFontSize.formatted(.number.precision(.fractionLength(1))) + " пт")
-                Picker("Тема подсветки кода", selection: $codeTheme) { ForEach(["GitHub Dark", "Xcode Dark", "Monokai"], id: \.self) { Text($0) } }
-                Toggle("Подсвечивать синтаксис", isOn: .constant(true))
+                Picker("Порядок сообщений", selection: $uiPreferences.messageOrder) {
+                    ForEach(MessageOrder.allCases) { Text($0.title).tag($0) }
+                }
+                settingSlider("Размер текста сообщений", value: $uiPreferences.messageFontSize, range: 11...22, suffix: uiPreferences.messageFontSize.formatted(.number.precision(.fractionLength(1))) + " пт")
+                Picker("Тема подсветки кода", selection: $uiPreferences.codeTheme) {
+                    ForEach(CodeColorTheme.allCases) { Text($0.title).tag($0) }
+                }
+                Toggle("Подсвечивать синтаксис Go", isOn: $uiPreferences.syntaxHighlighting)
+                AnswerTextView(text: chatPreview)
             }
             HMPanel("Прокрутка и группы") {
-                Toggle("Умная автопрокрутка", isOn: $smartScroll)
-                settingSlider("Скорость автопрокрутки", value: .constant(1), range: 0.25...2, suffix: "100%")
-                Toggle("Автоматически сворачивать расшифровки", isOn: $collapseGroups)
-                Toggle("Автоматически сворачивать ответы", isOn: $collapseGroups)
+                Toggle("Умная автопрокрутка", isOn: $preferences.smartAutoScroll)
+                settingSlider("Скорость автопрокрутки", value: $preferences.autoScrollSpeed, range: 0.25...2,
+                              suffix: "\(Int((preferences.autoScrollSpeed * 100).rounded()))%")
+                    .disabled(!preferences.smartAutoScroll)
+                Toggle("Автоматически сворачивать расшифровки", isOn: $uiPreferences.collapseTranscripts)
+                Toggle("Сворачивать последнюю группу расшифровок", isOn: $uiPreferences.collapseLatestTranscript)
+                    .disabled(!uiPreferences.collapseTranscripts)
+                Toggle("Автоматически сворачивать ответы", isOn: $uiPreferences.collapseAnswers)
+                Toggle("Сворачивать последний ответ", isOn: $uiPreferences.collapseLatestAnswer)
+                    .disabled(!uiPreferences.collapseAnswers)
             }
             HMPanel("Компактность") {
-                Toggle("Компактные быстрые действия", isOn: $compactActions)
-                Toggle("Лупа для встроенных схем", isOn: $codeMagnifier)
-                Toggle("Отменять генерацию с сохранением полученного текста", isOn: .constant(true))
+                Toggle("Компактные быстрые действия", isOn: $preferences.compactQuickActions)
+                Toggle("Лупа для встроенных схем", isOn: .constant(false)).disabled(true)
+                Toggle("Отменять генерацию при повторной отправке", isOn: $uiPreferences.cancelGenerationOnSend)
+                Picker("Ручная отмена", selection: $uiPreferences.retainCancelledAnswer) {
+                    Text("Сохранить полученный текст").tag(true)
+                    Text("Отменить без сохранения").tag(false)
+                }
             }
         }
     }
@@ -390,15 +587,25 @@ struct SettingsView: View {
     private var systemPage: some View {
         VStack(spacing: 14) {
             HMPanel("Язык и защита") {
-                Picker("Язык", selection: .constant("Русский")) { Text("Русский"); Text("English") }
-                Toggle("Защита от записи экрана", isOn: $screenProtection)
+                Picker("Язык", selection: .constant("Русский")) { Text("Русский"); Text("English") }.disabled(true)
+                LabeledContent("Исключение окон из захвата", value: "Запрошено у macOS")
+                Text("Главное окно, рабочее окно и телесуфлёр используют системное исключение из захвата. Совместимость программы трансляции проверяется отдельно в диагностике.").font(.caption).foregroundStyle(.secondary)
             }
             HMPanel("Прокси") {
-                TextField("https://login:password@host:port", text: $proxyURL)
-                HStack { Button("Проверить", systemImage: "antenna.radiowaves.left.and.right") {}; Button("Сохранить", systemImage: "square.and.arrow.down") {} }
+                Text("Прокси не подключён. Приложение использует прямое соединение с указанным API; отдельные данные доступа к прокси здесь не запрашиваются.")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack { Button("Проверить", systemImage: "antenna.radiowaves.left.and.right") {}.disabled(true); Button("Сохранить", systemImage: "square.and.arrow.down") {}.disabled(true) }
             }
             HMPanel("Обновления") {
-                HStack { VStack(alignment: .leading) { Text("Текущая версия"); Text("Локальная сборка").font(.caption).foregroundStyle(.secondary) }; Spacer(); Button("Проверить обновления", systemImage: "arrow.clockwise") {} }
+                HStack {
+                    VStack(alignment: .leading) {
+                        Text("Текущая версия")
+                        Text("\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Не указана") · сборка \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Не указана")")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer(); Button("Проверить обновления", systemImage: "arrow.clockwise") {}.disabled(true)
+                }
+                Text("Автоматическое обновление приложения ещё не подключено.").font(.caption).foregroundStyle(.secondary)
             }
             HMPanel("AI-провайдер") {
                 ProviderConfigurationView(settings: model.providerSettings)
@@ -415,20 +622,47 @@ struct SettingsView: View {
     private var storagePage: some View {
         VStack(spacing: 14) {
             HMPanel("Занято на диске") {
-                HStack { Image(systemName: "internaldrive").font(.title); VStack(alignment: .leading) { Text("Локальные данные приложения"); Text("Размер рассчитывается при открытии папки").font(.caption).foregroundStyle(.secondary) }; Spacer(); Text("—").font(.title2.bold()) }
-                ProgressView(value: 0.42).tint(DesignTokens.accent)
-                storageLegend("Аудиозаписи", "—", .cyan)
-                storageLegend("Записи собеседований", "—", .purple)
-                storageLegend("Скриншоты", "—", .orange)
-                storageLegend("Логи приложения", "—", .yellow)
+                HStack {
+                    Image(systemName: "internaldrive").font(.title)
+                    VStack(alignment: .leading) {
+                        Text("Локальные файлы приложения")
+                        if let snapshot = storageSnapshot {
+                            Text("\(snapshot.fileCount) файлов · \(snapshot.inspectedAt.formatted(date: .omitted, time: .shortened))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    Text(storageSnapshot.map { storageSize($0.totalBytes) } ?? "—").font(.title2.bold())
+                }
+                GeometryReader { geometry in
+                    HStack(spacing: 0) {
+                        ForEach(StorageArea.allCases) { area in
+                            storageColor(area).frame(width: geometry.size.width * (storageSnapshot?.fraction(for: area) ?? 0))
+                        }
+                    }
+                }.frame(height: 8).background(DesignTokens.elevated).clipShape(Capsule()).accessibilityHidden(true)
+                ForEach(StorageArea.allCases) { area in
+                    storageLegend(area.title, storageSnapshot.map { storageSize($0.bytes[area, default: 0]) } ?? "—", storageColor(area))
+                }
+                HStack {
+                    if storageIsLoading { ProgressView().controlSize(.small) }
+                    Spacer()
+                    Button("Обновить", systemImage: "arrow.clockwise") { Task { await refreshStorage() } }
+                        .disabled(storageIsLoading)
+                }
+                if let snapshot = storageSnapshot, snapshot.unreadableCount > 0 {
+                    Text("Не удалось прочитать \(snapshot.unreadableCount) элементов. Общий размер может быть неполным.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+                if let storageIssue { Text(storageIssue).font(.caption).foregroundStyle(.orange) }
+                Text("Объём файлов в папке приложения. Данные в памяти и кэш сборки не учитываются; ссылки пропускаются.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             HMPanel("Папки") {
-                folderRow("Аудиозаписи")
-                folderRow("Записи собеседований")
-                folderRow("Скриншоты")
-                folderRow("Логи приложения")
+                ForEach(StorageArea.allCases) { area in folderRow(area) }
             }
         }
+        .task { await refreshStorage() }
     }
 
     private var disguisePage: some View {
@@ -453,6 +687,50 @@ struct SettingsView: View {
     private var filteredHotkeys: [GlobalHotkeyService.Action] {
         let query = hotkeySearch.trimmingCharacters(in: .whitespacesAndNewlines)
         return GlobalHotkeyService.Action.allCases.filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) }
+    }
+
+    private var customAccent: Color { DesignTokens.color(for: model.preferences.accent) }
+
+    private var chatPreview: String {
+        """
+        ### Предпросмотр
+        Ответ и заметки используют выбранный размер текста. Длинный код прокручивается отдельно.
+        ```go
+        package main
+
+        import "fmt"
+
+        func sum(values []int) int {
+            total := 0
+            for _, value := range values {
+                total += value
+            }
+            return total
+        }
+
+        func main() {
+            examples := [][]int{
+                nil,
+                {},
+                {1, 2, 3},
+                {-2, 0, 2},
+            }
+            for _, values := range examples {
+                fmt.Println(sum(values))
+            }
+        }
+        ```
+        """
+    }
+
+    private var accentOptions: [(name: String, color: AppAccent)] {
+        [("Оранжевый", AppAccent(rgb: 0xFF9F0A)), ("Синий", AppAccent(rgb: 0x0A84FF)),
+         ("Фиолетовый", AppAccent(rgb: 0xBF5AF2)), ("Зелёный", .defaultColor),
+         ("Розовый", AppAccent(rgb: 0xFF375F)), ("Голубой", AppAccent(rgb: 0x64D2FF))]
+    }
+
+    private var accentBinding: Binding<Color> {
+        DesignTokens.colorBinding(Binding(get: { model.preferences.accent }, set: { model.preferences.accent = $0 }))
     }
 
     private func sourceStep(_ title: String, _ subtitle: String, _ icon: String, _ color: Color) -> some View {
@@ -490,8 +768,48 @@ struct SettingsView: View {
         HStack { Circle().fill(color).frame(width: 8, height: 8); Text(title); Spacer(); Text(value).foregroundStyle(.secondary) }
     }
 
-    private func folderRow(_ title: String) -> some View {
-        HStack { Text(title); Spacer(); Button("Открыть", systemImage: "folder") {} }
+    private func folderRow(_ area: StorageArea) -> some View {
+        HStack {
+            Text(area.title)
+            Spacer()
+            Button("Открыть", systemImage: "folder") {
+                Task {
+                    do {
+                        let url = try await storageInspector.prepareDirectory(for: area)
+                        guard !Task.isCancelled else { return }
+                        if !NSWorkspace.shared.open(url) { storageIssue = "Finder не смог открыть папку." }
+                    } catch is CancellationError { }
+                    catch { storageIssue = "Не удалось открыть папку: \(error.localizedDescription)" }
+                }
+            }.accessibilityLabel("Открыть папку: \(area.title)")
+        }
+    }
+
+    private func refreshStorage() async {
+        guard !storageIsLoading else { return }
+        storageIsLoading = true; storageIssue = nil
+        defer { storageIsLoading = false }
+        do {
+            let snapshot = try await storageInspector.snapshot()
+            guard !Task.isCancelled else { return }
+            storageSnapshot = snapshot
+        } catch is CancellationError { }
+        catch { storageIssue = "Не удалось рассчитать объём: \(error.localizedDescription)" }
+    }
+
+    private func storageSize(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+
+    private func storageColor(_ area: StorageArea) -> Color {
+        switch area {
+        case .audio: .cyan
+        case .interviews: .purple
+        case .screenshots: .orange
+        case .logs: .yellow
+        case .database: DesignTokens.accent
+        case .other: .secondary
+        }
     }
 }
 
@@ -524,7 +842,7 @@ private enum HMSettingsPane: String, CaseIterable, Identifiable {
         case .interviewRecording: "Качество видео, аудиоканалы и место сохранения"
         case .speech: "Голос, скорость, громкость и автоматическое чтение"
         case .hotkeys: "Все команды приложения в одном списке"
-        case .models: "Пять слотов и каталог доступных моделей"
+        case .models: "Пять сохраняемых слотов для текущего API"
         case .metaKeys: "Контроль одиночных системных клавиш"
         case .cursor: "Виртуальный указатель и защита положения"
         case .quickActions: "Команды над полем ввода"

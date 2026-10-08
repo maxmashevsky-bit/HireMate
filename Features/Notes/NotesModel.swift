@@ -6,6 +6,7 @@ import CopilotCore
 final class NotesModel {
     var query = ""
     var includeArchived = false
+    var selectedFolder: String?
     var tagsText = ""
     var edited: Note?
     var pendingSelection: Note?
@@ -15,27 +16,100 @@ final class NotesModel {
     var status = "Заметки хранятся только на этом Mac. Поиск не использует AI."
     private(set) var notes: [Note] = []
     private(set) var isBusy = false
+    private(set) var isSearching = false
+    private(set) var isLoadingMore = false
+    private(set) var totalNoteCount = 0
+    private(set) var folders: [NoteFolderCount] = []
+    private(set) var hasMore = false
+    var onLibraryChanged: (@MainActor () -> Void)?
     private var baseline: Note?
     private var profile: ProfileID
     private var operationID = UUID()
+    private var refreshID = UUID()
+    private var pageRequestID = UUID()
+    private var nextOffset = 0
     private var saveTask: Task<Void, Never>?
+    private var lastSaveSucceeded = false
     private let repository: any NoteRepository
     init(profile: ProfileID, repository: any NoteRepository) { self.profile = profile; self.repository = repository }
     var hasEdits: Bool { edited != baseline || tagsText != (baseline?.tags.joined(separator: ", ") ?? "") }
+    var canInspectIndex: Bool { baseline != nil && baseline?.id == edited?.id && repository is any NoteIndexInspecting }
+    func indexPage(noteID: UUID, profile requestedProfile: ProfileID, offset: Int) async throws -> NoteIndexPage {
+        guard requestedProfile == profile, let inspector = repository as? any NoteIndexInspecting else { throw LocalStoreError.unavailable }
+        let id = operationID
+        let page = try await inspector.noteIndexPage(id: noteID, profile: requestedProfile, offset: offset, limit: 50)
+        try Task.checkCancellation()
+        guard operationID == id, requestedProfile == profile else { throw CancellationError() }
+        return page
+    }
+    func rebuildIndex(noteID: UUID) async -> Bool {
+        guard canInspectIndex, edited?.id == noteID, !hasEdits, !isBusy else {
+            status = "Сначала сохраните или отмените правки выбранной заметки."; return false
+        }
+        let id = operationID
+        lastSaveSucceeded = false
+        save()
+        await waitForPendingSave()
+        return operationID == id && lastSaveSucceeded
+    }
     func activateProfile(_ profile: ProfileID) {
         guard self.profile != profile else { return }
-        saveTask?.cancel(); operationID = UUID(); isBusy = false
-        self.profile = profile; notes = []; edited = nil; baseline = nil; tagsText = ""; query = ""
+        saveTask?.cancel(); operationID = UUID(); refreshID = UUID(); pageRequestID = UUID()
+        isBusy = false; isSearching = false; isLoadingMore = false; totalNoteCount = 0; folders = []; hasMore = false; nextOffset = 0
+        self.profile = profile; notes = []; edited = nil; baseline = nil; tagsText = ""; query = ""; selectedFolder = nil
         pendingSelection = nil; pendingImport = nil; confirmNew = false
         Task { await refresh() }
     }
     func refresh() async {
-        let id = operationID; let profile = profile; let query = query; let archive = includeArchived
+        let refresh = UUID(); refreshID = refresh; pageRequestID = UUID(); isSearching = true; isLoadingMore = false
+        defer { if refreshID == refresh { isSearching = false } }
+        let id = operationID; let profile = profile; let query = query; let archive = includeArchived; let folder = selectedFolder
         do {
-            let loaded = try await repository.notes(profile: profile, query: query, includeArchived: archive)
-            guard operationID == id, self.query == query, self.includeArchived == archive else { return }
-            notes = loaded
-        } catch { if operationID == id { status = "Не удалось прочитать заметки." } }
+            try Task.checkCancellation()
+            let page: NoteLibraryPage
+            if let paging = repository as? any NoteLibraryPaging {
+                page = try await paging.noteLibraryPage(profile: profile, query: query, includeArchived: archive, folder: folder, offset: 0, limit: 50)
+            } else {
+                let loaded = try await repository.notes(profile: profile, query: query, includeArchived: archive)
+                let counts = Dictionary(grouping: loaded, by: { $0.folder ?? "" }).map { NoteFolderCount(name: $0.key, count: $0.value.count) }.sorted { $0.name < $1.name }
+                let filtered = loaded.filter { folder == nil || ($0.folder ?? "") == folder }
+                page = NoteLibraryPage(notes: filtered, totalCount: filtered.count, folders: counts, offset: 0, limit: max(1, filtered.count))
+            }
+            try Task.checkCancellation()
+            guard refreshID == refresh, operationID == id, self.query == query, self.includeArchived == archive, selectedFolder == folder else { return }
+            notes = page.notes; totalNoteCount = page.totalCount; folders = page.folders
+            nextOffset = page.notes.count; hasMore = page.hasNext
+        } catch is CancellationError { }
+        catch {
+            if refreshID == refresh, operationID == id, self.query == query, self.includeArchived == archive, selectedFolder == folder {
+                status = "Не удалось прочитать заметки."
+            }
+        }
+    }
+    func loadMore() async {
+        guard hasMore, !isSearching, !isLoadingMore, let paging = repository as? any NoteLibraryPaging else { return }
+        let request = UUID(); pageRequestID = request; isLoadingMore = true
+        defer { if pageRequestID == request { isLoadingMore = false } }
+        let refresh = refreshID; let operation = operationID; let profile = profile
+        let query = query; let archive = includeArchived; let folder = selectedFolder; let offset = nextOffset
+        do {
+            let page = try await paging.noteLibraryPage(profile: profile, query: query, includeArchived: archive,
+                                                      folder: folder, offset: offset, limit: 50)
+            try Task.checkCancellation()
+            guard pageRequestID == request, refreshID == refresh, operationID == operation,
+                  self.query == query, includeArchived == archive, selectedFolder == folder else { return }
+            let existing = Set(notes.map(\.id))
+            notes.append(contentsOf: page.notes.filter { !existing.contains($0.id) })
+            totalNoteCount = page.totalCount; folders = page.folders
+            nextOffset = offset + page.notes.count; hasMore = page.hasNext && !page.notes.isEmpty
+            status = "Загружено \(notes.count) из \(totalNoteCount) заметок."
+        } catch is CancellationError { }
+        catch {
+            if pageRequestID == request, refreshID == refresh, operationID == operation,
+               self.query == query, includeArchived == archive, selectedFolder == folder {
+                status = "Не удалось загрузить следующую страницу. Повторите загрузку."
+            }
+        }
     }
     func openSource(_ id: UUID) async {
         let scope = profile; let operation = operationID
@@ -63,17 +137,19 @@ final class NotesModel {
         guard note.isValid else { status = "Проверьте название, теги и размер текста (до 1 МБ)."; return }
         note.updatedAt = Date(); note.contentHash = Note.hash(note.markdown)
         let snapshot = edited; let tagSnapshot = tagsText; let id = operationID
-        isBusy = true; status = "Сохранение и локальная индексация…"
+        isBusy = true; lastSaveSucceeded = false; status = "Сохранение и локальная индексация…"
         saveTask = Task { [weak self] in
             guard let self else { return }
             defer { if operationID == id { isBusy = false; saveTask = nil } }
             do {
                 try await repository.saveNote(note)
                 guard operationID == id else { return }
+                lastSaveSucceeded = true
                 // Не затирать новые правки, сделанные во время записи.
                 if edited == snapshot && tagsText == tagSnapshot { applySelection(note) }
                 else if edited?.id == note.id { baseline = note }
                 status = "Заметка сохранена; локальный индекс обновлён."
+                onLibraryChanged?()
                 await refresh()
             } catch { if operationID == id { status = "Сохранение не завершено. Текст остаётся в редакторе." } }
         }
@@ -90,6 +166,7 @@ final class NotesModel {
             guard operationID == id else { return }
             if edited?.id == note.id { edited = nil; baseline = nil; tagsText = "" }
             status = "Заметка и индекс удалены."
+            onLibraryChanged?()
             await refresh()
         } catch { if operationID == id { status = "Заметка не удалена." } }
     }

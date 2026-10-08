@@ -10,6 +10,57 @@ private struct NoTranscriptionSecrets: SecureSecretStore {
 
 final class TranscriptionFlowTests: XCTestCase {
     @MainActor
+    func testMeetingActivationClearsTranscriptsButSubchatAndFailedNavigationKeepThem() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("hiremate-transcript-scope-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transcription = TranscriptionModel(secrets: NoTranscriptionSecrets(), network: NetworkClient(), serviceFactory: { _ in
+            ScriptedTranscription(text: "Текст только первой встречи")
+        })
+        let conversation = ConversationModel(profileID: .technical, repository: GRDBMeetingRepository(directory: root),
+                                             secrets: NoTranscriptionSecrets(), network: NetworkClient())
+        transcription.activateMeeting(conversation.meeting.id)
+        conversation.onMeetingActivated = { transcription.activateMeeting($0) }
+        let segment = AudioSegment(source: .system, startedAt: 0, samples: [0.1], reason: "Тест")
+        transcription.start(segment: segment, configuration: ModelConfiguration(), vocabulary: [])
+        try await waitForResult(transcription)
+        transcription.includeRecentContext = true
+        await conversation.createSubchat()
+        XCTAssertFalse(transcription.transcriptEntries.isEmpty)
+        await conversation.open(Meeting(profileID: .technical, title: "Отсутствует в базе", isEphemeral: false))
+        XCTAssertFalse(transcription.transcriptEntries.isEmpty)
+        transcription.activateMeeting(conversation.meeting.id)
+        XCTAssertTrue(transcription.contextForRequest().contains("первой встречи"))
+        await conversation.createMeeting()
+        XCTAssertEqual(transcription.meetingID, conversation.meeting.id)
+        XCTAssertTrue(transcription.transcriptEntries.isEmpty)
+        XCTAssertTrue(transcription.contextForRequest().isEmpty)
+        XCTAssertFalse(transcription.includeRecentContext)
+        XCTAssertNil(transcription.result)
+    }
+
+    @MainActor
+    func testMeetingChangeCancelsRecognitionAndDropsPreviousResult() async throws {
+        let transcription = TranscriptionModel(secrets: NoTranscriptionSecrets(), network: NetworkClient(), serviceFactory: { _ in
+            TimedTranscription()
+        })
+        transcription.activateMeeting(UUID())
+        let segment = AudioSegment(source: .system, startedAt: 0, samples: [0.1], reason: "Тест")
+        transcription.start(segment: segment, configuration: ModelConfiguration(), vocabulary: [])
+        let next = UUID()
+        transcription.activateMeeting(next)
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(transcription.meetingID, next)
+        XCTAssertFalse(transcription.isBusy)
+        XCTAssertNil(transcription.result)
+        XCTAssertTrue(transcription.transcriptEntries.isEmpty)
+        XCTAssertTrue(transcription.partialText.isEmpty)
+        transcription.start(segment: segment, configuration: ModelConfiguration(), vocabulary: [])
+        try await waitForResult(transcription)
+        XCTAssertEqual(transcription.result?.segmentID, segment.id)
+        XCTAssertEqual(transcription.transcriptEntries.count, 1)
+    }
+
+    @MainActor
     func testMeasuresProviderLatencyWithoutPayloadData() async throws {
         let model = TranscriptionModel(secrets: NoTranscriptionSecrets(), network: NetworkClient(), serviceFactory: { _ in
             TimedTranscription()

@@ -44,30 +44,42 @@ public struct NoteFragment: Codable, Identifiable, Sendable, Equatable {
 }
 
 public enum NoteChunker {
-    /// Разбивка по абзацам/заголовкам, длинные блоки — по Unicode Characters с overlap 100.
+    /// Короткие абзацы объединяются; длинные блоки делятся по Characters с ограниченным overlap.
     public static func chunks(_ note: Note, limit: Int = 800, overlap: Int = 100) -> [NoteFragment] {
         let maximum = min(2_000, max(200, limit)); let carry = min(maximum / 3, max(0, overlap))
         let text = note.markdown.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
-        var blocks: [String] = []; var paragraph = ""
-        for line in text.components(separatedBy: "\n") {
-            if line.isEmpty || line.hasPrefix("#") {
-                if !paragraph.isEmpty { blocks.append(paragraph); paragraph = "" }
-                if !line.isEmpty { paragraph = line }
-            } else { paragraph += (paragraph.isEmpty ? "" : "\n") + line }
+        var output: [String] = []; var packed = ""; var paragraph = ""
+        func flush() {
+            if !packed.isEmpty { output.append(packed); packed = "" }
         }
-        if !paragraph.isEmpty { blocks.append(paragraph) }
-        if blocks.isEmpty { blocks = [note.title] }
-        var output: [String] = []
-        for block in blocks {
+        func consume(_ block: String) {
+            guard !block.isEmpty else { return }
+            if block.count <= maximum {
+                if packed.isEmpty { packed = block }
+                else if packed.count + 2 + block.count <= maximum { packed += "\n\n" + block }
+                else { flush(); packed = block }
+                return
+            }
+            flush()
             let characters = Array(block)
             var start = 0
             while start < characters.count {
                 let end = min(characters.count, start + maximum)
-                output.append(String(characters[start..<end]))
-                if end == characters.count { break }
-                start = end - carry
+                let part = String(characters[start..<end])
+                if end == characters.count { packed = part; break }
+                output.append(part); start = end - carry
             }
         }
+        for substring in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(substring)
+            if line.isEmpty || line.hasPrefix("#") {
+                if !paragraph.isEmpty { consume(paragraph); paragraph = "" }
+                if !line.isEmpty { paragraph = line }
+            } else { paragraph += (paragraph.isEmpty ? "" : "\n") + line }
+        }
+        if !paragraph.isEmpty { consume(paragraph) }
+        if output.isEmpty && packed.isEmpty { consume(note.title) }
+        flush()
         return output.enumerated().map { NoteFragment(note: note, index: $0.offset, text: $0.element) }
     }
     public static func ftsQuery(_ text: String) -> String? {

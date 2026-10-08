@@ -2,6 +2,27 @@ import XCTest
 import CopilotCore
 
 final class MeetingArchiveTests: XCTestCase {
+    func testTranscriptExportPreservesSpeakersDemoAndCompactionAndReadsLegacyJSON() throws {
+        let meeting = Meeting(profileID: .technical, title: "История", isEphemeral: false)
+        var timeline = TranscriptTimeline(maximumEntries: 1)
+        let first = AudioSegment(source: .microphone, startedAt: 1, samples: [0.1], reason: "Тест")
+        let second = AudioSegment(source: .system, startedAt: 2, samples: [0.1], reason: "Тест")
+        timeline.append(TranscriptResult(segment: first, text: "Мой ответ", isDemo: false))
+        timeline.append(TranscriptResult(segment: second, text: "Как работает Go?", isDemo: true))
+        let archive = MeetingArchive(meeting: meeting, subchats: [], messages: [], transcriptTimeline: timeline)
+        let markdown = archive.markdown()
+        XCTAssertTrue(markdown.contains("## Расшифровки"))
+        XCTAssertTrue(markdown.contains("[Максим] Мой ответ"))
+        XCTAssertTrue(markdown.contains("### Собеседник · учебный пример, демо"))
+        XCTAssertTrue(markdown.contains("Как работает Go?"))
+        let encoded = try JSONEncoder().encode(archive)
+        XCTAssertEqual(try JSONDecoder().decode(MeetingArchive.self, from: encoded).transcriptTimeline, timeline)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        legacy.removeValue(forKey: "transcriptTimeline")
+        let restored = try JSONDecoder().decode(MeetingArchive.self, from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertNil(restored.transcriptTimeline)
+        XCTAssertEqual(restored.meeting.id, meeting.id)
+    }
     func testMarkdownPreservesCodeAndMarksPartialDemo() {
         let meeting = Meeting(profileID: .liveCoding, title: "Go\nИнтервью", isEphemeral: true)
         let chat = Subchat(meetingID: meeting.id, title: "Задача")

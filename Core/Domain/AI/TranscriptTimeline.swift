@@ -13,17 +13,20 @@ public struct TranscriptEntry: Identifiable, Codable, Sendable, Equatable {
     public let startedAt: TimeInterval
     public let duration: TimeInterval
     public let isFinal: Bool
+    public let isDemo: Bool?
+    public let recordedAt: Date?
 
-    public init(result: TranscriptResult, maximumCharacters: Int = 4_000) {
+    public init(result: TranscriptResult, maximumCharacters: Int = 4_000, recordedAt: Date = Date()) {
         id = result.id; segmentID = result.segmentID
         speaker = result.source == .system ? .interviewer : .candidate
         text = String(result.text.split(whereSeparator: \Character.isWhitespace).joined(separator: " ")
             .prefix(min(4_000, max(1, maximumCharacters))))
         startedAt = result.startedAt; duration = result.duration; isFinal = true
+        isDemo = result.isDemo; self.recordedAt = recordedAt
     }
 }
 
-public struct TranscriptTimeline: Sendable {
+public struct TranscriptTimeline: Codable, Equatable, Sendable {
     public private(set) var entries: [TranscriptEntry] = []
     public private(set) var compactedInterviewerCount = 0
     public private(set) var compactedCandidateCount = 0
@@ -37,10 +40,38 @@ public struct TranscriptTimeline: Sendable {
         self.maximumCharacters = min(50_000, max(256, maximumCharacters))
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case entries, compactedInterviewerCount, compactedCandidateCount, compactedHighlights
+        case maximumEntries, maximumCharacters
+    }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        entries = try values.decode([TranscriptEntry].self, forKey: .entries)
+        compactedInterviewerCount = try values.decode(Int.self, forKey: .compactedInterviewerCount)
+        compactedCandidateCount = try values.decode(Int.self, forKey: .compactedCandidateCount)
+        compactedHighlights = try values.decode([String].self, forKey: .compactedHighlights)
+        maximumEntries = try values.decode(Int.self, forKey: .maximumEntries)
+        maximumCharacters = try values.decode(Int.self, forKey: .maximumCharacters)
+        guard (1...200).contains(maximumEntries), (256...50_000).contains(maximumCharacters),
+              entries.count <= maximumEntries, entries.reduce(0, { $0 + $1.text.count }) <= maximumCharacters,
+              Set(entries.map(\.segmentID)).count == entries.count, Set(entries.map(\.id)).count == entries.count,
+              entries.allSatisfy({ !$0.text.isEmpty && $0.text.count <= 4_000 && $0.isFinal &&
+                  $0.startedAt.isFinite && $0.startedAt >= 0 && $0.duration.isFinite && $0.duration > 0 && $0.duration <= 60 }),
+              (0...1_000_000).contains(compactedInterviewerCount), (0...1_000_000).contains(compactedCandidateCount),
+              compactedHighlights.count <= 4, compactedHighlights.allSatisfy({ $0.count <= 300 }) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath,
+                                                    debugDescription: "Повреждена ограниченная история расшифровок"))
+        }
+    }
+
     public mutating func append(_ result: TranscriptResult) {
         let entry = TranscriptEntry(result: result, maximumCharacters: maximumCharacters)
-        guard !entry.text.isEmpty else { return }
-        if let index = entries.firstIndex(where: { $0.segmentID == entry.segmentID }) { entries[index] = entry }
+        guard !entry.text.isEmpty, entry.startedAt.isFinite, entry.startedAt >= 0,
+              entry.duration.isFinite, entry.duration > 0, entry.duration <= 60 else { return }
+        if let index = entries.firstIndex(where: { $0.segmentID == entry.segmentID }) {
+            entries[index] = TranscriptEntry(result: result, maximumCharacters: maximumCharacters,
+                                            recordedAt: entries[index].recordedAt ?? Date())
+        }
         else { entries.append(entry) }
         while entries.count > maximumEntries || entries.reduce(0, { $0 + $1.text.count }) > maximumCharacters {
             compact(entries.removeFirst())
@@ -87,8 +118,9 @@ public struct TranscriptTimeline: Sendable {
         if compactedHighlights.count > 4 { compactedHighlights.removeFirst(compactedHighlights.count - 4) }
     }
 
-    private func compactedSummary(maximumCharacters limit: Int) -> String {
+    public func compactedSummary(maximumCharacters limit: Int = 1_000) -> String {
         guard compactedCount > 0 else { return "" }
+        let limit = min(1_000, max(1, limit))
         let header = "[Ранее] Исключено дословных реплик: собеседник — \(compactedInterviewerCount), Максим — \(compactedCandidateCount)."
         guard header.count < limit else { return String(header.prefix(limit)) }
         var lines = [header]
@@ -99,4 +131,9 @@ public struct TranscriptTimeline: Sendable {
         }
         return lines.joined(separator: "\n")
     }
+}
+
+public protocol TranscriptRepository: Sendable {
+    func transcriptTimeline(meetingID: UUID, profile: ProfileID) async throws -> TranscriptTimeline
+    func saveTranscriptTimeline(_ timeline: TranscriptTimeline, meetingID: UUID, profile: ProfileID) async throws
 }

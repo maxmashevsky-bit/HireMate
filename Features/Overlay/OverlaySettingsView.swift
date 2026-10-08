@@ -47,35 +47,7 @@ struct OverlaySettingsView: View {
                         Text(action.title).tag(action)
                     }
                 }
-                Toggle("Команда включена", isOn: Binding(
-                    get: { preferences.isHotkeyEnabled(selectedAction) },
-                    set: {
-                        preferences.setHotkeyEnabled($0, for: selectedAction)
-                        controller.configureHotkeys()
-                    }
-                ))
-                Picker("Клавиша", selection: Binding(
-                    get: { effectiveOverride.key },
-                    set: { saveOverride(key: $0, usesShift: effectiveOverride.usesShift) }
-                )) {
-                    ForEach(HotkeyKey.allCases) { key in Text(key.title).tag(key) }
-                }
-                Toggle("Добавить Shift", isOn: Binding(
-                    get: { effectiveOverride.usesShift },
-                    set: { saveOverride(key: effectiveOverride.key, usesShift: $0) }
-                ))
-                HStack {
-                    Text("Текущее сочетание: \(effectiveShortcut)")
-                    Spacer()
-                    Button("По умолчанию") {
-                        controller.preferences.setHotkeyOverride(nil, for: selectedAction)
-                        controller.configureHotkeys()
-                    }
-                    .disabled(controller.preferences.hotkeyOverride(for: selectedAction) == nil)
-                }
-                .font(.caption)
-                Text("Если сочетание совпадёт с другой командой или занято системой, оно появится ниже как незарегистрированное.")
-                    .font(.caption).foregroundStyle(.secondary)
+                HotkeyBindingEditor(controller: controller, action: selectedAction)
             }
             Button("Сбросить все сочетания по умолчанию") {
                 preferences.resetAllHotkeys()
@@ -92,11 +64,6 @@ struct OverlaySettingsView: View {
         .onChange(of: controller.preferences.opacity) { _, _ in controller.applyOpacity() }
         .onChange(of: controller.preferences.shortcutsEnabled) { _, _ in controller.configureHotkeys() }
         .onChange(of: controller.preferences.shortcutPreset) { _, _ in controller.configureHotkeys() }
-    }
-
-    private var effectiveOverride: HotkeyOverride {
-        controller.preferences.hotkeyOverride(for: selectedAction)
-            ?? HotkeyOverride(key: selectedAction.defaultKey, usesShift: selectedAction.needsShift)
     }
 
     private var filteredActions: [GlobalHotkeyService.Action] {
@@ -119,13 +86,61 @@ struct OverlaySettingsView: View {
             "Окно исключается из ScreenCaptureKit публичным API, но сторонние программы могут захватывать его иначе. Проверьте результат в «Диагностике»."
         }
     }
+}
 
-    private var effectiveShortcut: String {
-        controller.preferences.shortcutLabel(for: selectedAction)
+@MainActor
+struct HotkeyBindingEditor: View {
+    @Bindable var controller: OverlayController
+    let action: GlobalHotkeyService.Action
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Toggle("Команда включена", isOn: Binding(
+                get: { controller.preferences.isHotkeyEnabled(action) },
+                set: {
+                    controller.preferences.setHotkeyEnabled($0, for: action)
+                    controller.configureHotkeys()
+                }
+            ))
+            Picker("Клавиша", selection: Binding(
+                get: { effectiveOverride.key },
+                set: { saveOverride(key: $0, usesShift: effectiveOverride.usesShift) }
+            )) {
+                ForEach(HotkeyKey.allCases) { key in Text(key.title).tag(key) }
+            }
+            Toggle("Добавить Shift", isOn: Binding(
+                get: { effectiveOverride.usesShift },
+                set: { saveOverride(key: effectiveOverride.key, usesShift: $0) }
+            ))
+            HStack {
+                Text(controller.preferences.shortcutLabel(for: action)).monospaced()
+                Spacer()
+                Button("По умолчанию") {
+                    controller.preferences.setHotkeyOverride(nil, for: action)
+                    controller.preferences.setHotkeyEnabled(true, for: action)
+                    controller.configureHotkeys()
+                }
+                .disabled(controller.preferences.hotkeyOverride(for: action) == nil
+                          && controller.preferences.isHotkeyEnabled(action))
+            }
+            if !controller.preferences.shortcutsEnabled {
+                Text("Глобальные горячие клавиши отключены.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if controller.preferences.isHotkeyEnabled(action),
+                      !controller.hotkeys.registeredActions.contains(action) {
+                Text("Сочетание не зарегистрировано. Выберите другую клавишу или набор сочетаний.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+        }
+    }
+
+    private var effectiveOverride: HotkeyOverride {
+        controller.preferences.hotkeyOverride(for: action)
+            ?? HotkeyOverride(key: action.defaultKey, usesShift: action.needsShift)
     }
 
     private func saveOverride(key: HotkeyKey, usesShift: Bool) {
-        controller.preferences.setHotkeyOverride(HotkeyOverride(key: key, usesShift: usesShift), for: selectedAction)
+        controller.preferences.setHotkeyOverride(HotkeyOverride(key: key, usesShift: usesShift), for: action)
         controller.configureHotkeys()
     }
 }

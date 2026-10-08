@@ -8,6 +8,198 @@ private struct FixedSecureInputChecker: SecureInputChecking {
 
 final class HotkeyPreferencesTests: XCTestCase {
     @MainActor
+    func testQuickActionHintsFollowAssignedNumericCustomAndDisabledShortcuts() throws {
+        let suite = "QuickActionHints.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = OverlayPreferences(defaults: defaults)
+        XCTAssertEqual(preferences.quickActionShortcutLabel(slot: 1), "⌘1")
+        XCTAssertEqual(preferences.quickActionShortcutLabel(slot: 5), "⌘5")
+        preferences.setHotkeyOverride(HotkeyOverride(key: .m, usesShift: true), for: .quick1)
+        XCTAssertEqual(preferences.quickActionShortcutLabel(slot: 1), "⌘⇧M")
+        preferences.setHotkeyEnabled(false, for: .quick5)
+        XCTAssertEqual(preferences.quickActionShortcutLabel(slot: 5), "Отключено")
+        preferences.shortcutsEnabled = false
+        XCTAssertEqual(preferences.quickActionShortcutLabel(slot: 1), "Горячие клавиши отключены")
+    }
+
+    @MainActor
+    func testModelCycleShortcutRequiresOptInPersistsAndResetsToDisabled() throws {
+        let suite = "ModelCycleHotkey.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = OverlayPreferences(defaults: defaults)
+        XCTAssertFalse(preferences.isHotkeyEnabled(.cycleModels))
+        XCTAssertEqual(preferences.shortcutLabel(for: .cycleModels), "Отключено")
+        preferences.setHotkeyEnabled(true, for: .cycleModels)
+        let reopened = OverlayPreferences(defaults: defaults)
+        XCTAssertTrue(reopened.isHotkeyEnabled(.cycleModels))
+        XCTAssertEqual(reopened.shortcutLabel(for: .cycleModels), "⌘⇧M")
+        reopened.resetAllHotkeys()
+        XCTAssertFalse(OverlayPreferences(defaults: defaults).isHotkeyEnabled(.cycleModels))
+    }
+
+    @MainActor
+    func testStatusIndicatorVisibilityAndCornerPersistWithSafeDefaults() throws {
+        let suite = "OverlayStatus.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = OverlayPreferences(defaults: defaults)
+        XCTAssertTrue(preferences.showsStatusIndicator)
+        XCTAssertEqual(preferences.statusCorner, .bottomRight)
+        preferences.showsStatusIndicator = false
+        for corner in OverlayStatusCorner.allCases {
+            preferences.statusCorner = corner
+            let restored = OverlayPreferences(defaults: defaults)
+            XCTAssertEqual(restored.statusCorner, corner)
+            XCTAssertFalse(restored.showsStatusIndicator)
+        }
+        defaults.set("unknown", forKey: "overlay.statusCorner")
+        defaults.set("invalid", forKey: "overlay.showsStatusIndicator")
+        let corrupt = OverlayPreferences(defaults: defaults)
+        XCTAssertEqual(corrupt.statusCorner, .bottomRight)
+        XCTAssertTrue(corrupt.showsStatusIndicator)
+    }
+
+    func testHistoryFollowingUsesLatestEdgeForSelectedMessageOrder() {
+        let nearTop = HistoryViewport(offset: 30, height: 500, contentHeight: 2000)
+        XCTAssertTrue(nearTop.nearLatest(order: .newestTop))
+        XCTAssertFalse(nearTop.nearLatest(order: .newestBottom))
+        let nearBottom = HistoryViewport(offset: 1470, height: 500, contentHeight: 2000)
+        XCTAssertFalse(nearBottom.nearLatest(order: .newestTop))
+        XCTAssertTrue(nearBottom.nearLatest(order: .newestBottom))
+        let shortHistory = HistoryViewport(height: 500, contentHeight: 100)
+        XCTAssertTrue(shortHistory.nearLatest(order: .newestTop))
+        XCTAssertTrue(shortHistory.nearLatest(order: .newestBottom))
+    }
+    @MainActor
+    func testTeleprompterColorsPersistRestoreCorruptValuesAndReset() throws {
+        let suite = "TeleprompterColors.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let colors = TeleprompterAppearance(defaults: defaults)
+        XCTAssertEqual(colors.background.hex, "#111111")
+        XCTAssertEqual(colors.neighbor.hex, "#FFFFFF")
+        XCTAssertEqual(colors.active.hex, "#FFFFFF")
+        colors.background = .init(rgb: 0x222233)
+        colors.neighbor = .init(rgb: 0xAABBCC)
+        colors.active = .init(rgb: 0x00FF00)
+        let restored = TeleprompterAppearance(defaults: defaults)
+        XCTAssertEqual(restored.background, colors.background)
+        XCTAssertEqual(restored.neighbor, colors.neighbor)
+        XCTAssertEqual(restored.active, colors.active)
+        defaults.set("#FFFF", forKey: "teleprompter.activeColor")
+        XCTAssertEqual(TeleprompterAppearance(defaults: defaults).active.hex, "#FFFFFF")
+        restored.reset()
+        let reset = TeleprompterAppearance(defaults: defaults)
+        XCTAssertEqual(reset.background.hex, "#111111")
+        XCTAssertEqual(reset.neighbor.hex, "#FFFFFF")
+        XCTAssertEqual(reset.active.hex, "#FFFFFF")
+    }
+
+    @MainActor
+    func testPanelLayoutMovesReordersHidesRestoresAndPersists() throws {
+        let suite = "PanelLayout.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = OverlayPreferences(defaults: defaults)
+        preferences.movePanelTool(.screenshot, to: .header, before: .provider)
+        XCTAssertEqual(preferences.panelLayout.header.prefix(3), [.audio, .screenshot, .provider])
+        XCTAssertFalse(preferences.panelLayout.input.contains(.screenshot))
+        preferences.movePanelTool(.headerNotes, to: .hidden)
+        XCTAssertEqual(preferences.panelLayout.hidden, [.headerNotes])
+        preferences.movePanelTool(.headerNotes, to: .input, before: .context)
+        XCTAssertTrue(preferences.panelLayout.hidden.isEmpty)
+        XCTAssertEqual(preferences.panelLayout.input.first, .headerNotes)
+        let beforeSelfDrop = preferences.panelLayout
+        preferences.movePanelTool(.context, to: .input, before: .context)
+        XCTAssertEqual(preferences.panelLayout, beforeSelfDrop)
+        XCTAssertEqual(OverlayPreferences(defaults: defaults).panelLayout, preferences.panelLayout)
+        let all = preferences.panelLayout.header + preferences.panelLayout.input + preferences.panelLayout.hidden
+        XCTAssertEqual(all.count, MeetingPanelTool.allCases.count)
+        XCTAssertEqual(Set(all), Set(MeetingPanelTool.allCases))
+        preferences.showsQuickActions = false
+        preferences.resetPanelLayout()
+        XCTAssertEqual(OverlayPreferences(defaults: defaults).panelLayout, .standard)
+        XCTAssertTrue(preferences.showsQuickActions)
+    }
+
+    func testPanelLayoutRejectsMissingDuplicateAndUnknownTools() throws {
+        let invalidLayouts = [
+            Data("{\"header\":[],\"input\":[],\"hidden\":[]}".utf8),
+            Data("{\"header\":[\"unknown\"],\"input\":[],\"hidden\":[]}".utf8),
+            Data("invalid JSON".utf8)
+        ]
+        for data in invalidLayouts { XCTAssertEqual(MeetingPanelLayout.restore(data), .standard) }
+        var duplicate = MeetingPanelLayout.standard
+        duplicate[.hidden] = [.audio]
+        XCTAssertEqual(MeetingPanelLayout.restore(try JSONEncoder().encode(duplicate)), .standard)
+    }
+
+    func testHistoryPagesMovePartOfViewportInsteadOfJumpingToEnds() {
+        let viewport = HistoryViewport(offset: 1200, height: 1000, contentHeight: 5000)
+        XCTAssertEqual(viewport.pagedOffset(direction: -1), 400)
+        XCTAssertEqual(viewport.pagedOffset(direction: 1), 2000)
+        XCTAssertFalse(viewport.nearBottom)
+        XCTAssertEqual(viewport.pagedOffset(direction: 0), 1200)
+    }
+
+    func testHistoryPagingClampsAtContentEdgesAndHandlesShortHistory() {
+        XCTAssertEqual(HistoryViewport(offset: 100, height: 500, contentHeight: 2000).pagedOffset(direction: -1), 0)
+        let bottom = HistoryViewport(offset: 1400, height: 500, contentHeight: 2000)
+        XCTAssertEqual(bottom.pagedOffset(direction: 1), 1500)
+        XCTAssertFalse(bottom.nearBottom)
+        XCTAssertTrue(HistoryViewport(offset: 1470, height: 500, contentHeight: 2000).nearBottom)
+        XCTAssertEqual(HistoryViewport(height: 500, contentHeight: 100).pagedOffset(direction: 1), 0)
+        XCTAssertEqual(HistoryViewport().pagedOffset(direction: -1), 0)
+    }
+
+    func testStreamingDoesNotMoveHistoryWhileUserReadsEarlierMessages() {
+        var policy = HistoryScrollPolicy()
+        XCTAssertTrue(policy.receivedContent(automatically: true))
+        policy.beginUserScroll()
+        for _ in 0..<100 {
+            XCTAssertFalse(policy.receivedContent(automatically: true))
+        }
+        policy.endUserScroll(nearLatest: false)
+        XCTAssertFalse(policy.receivedContent(automatically: true))
+        XCTAssertTrue(policy.hasUnreadContent)
+        policy.jumpToLatest()
+        XCTAssertFalse(policy.hasUnreadContent)
+        XCTAssertTrue(policy.receivedContent(automatically: true))
+    }
+
+    func testReturningToBottomResumesFollowingButDisabledAutoscrollDoesNotJump() {
+        var policy = HistoryScrollPolicy()
+        policy.beginUserScroll()
+        policy.endUserScroll(nearLatest: true)
+        XCTAssertTrue(policy.receivedContent(automatically: true))
+        XCTAssertFalse(policy.receivedContent(automatically: false))
+        XCTAssertTrue(policy.hasUnreadContent)
+        policy.jumpToLatest()
+        XCTAssertFalse(policy.hasUnreadContent)
+        XCTAssertFalse(policy.receivedContent(automatically: false))
+    }
+
+    @MainActor
+    func testMeetingPanelPreferencesPersist() throws {
+        let suite = "OverlayScroll.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = OverlayPreferences(defaults: defaults)
+        XCTAssertTrue(preferences.smartAutoScroll)
+        XCTAssertTrue(preferences.showsQuickActions)
+        XCTAssertFalse(preferences.compactQuickActions)
+        preferences.smartAutoScroll = false
+        preferences.showsQuickActions = false
+        preferences.compactQuickActions = true
+        let restored = OverlayPreferences(defaults: defaults)
+        XCTAssertFalse(restored.smartAutoScroll)
+        XCTAssertFalse(restored.showsQuickActions)
+        XCTAssertTrue(restored.compactQuickActions)
+    }
+
+    @MainActor
     func testDefaultBindingsAreUniqueInEveryPreset() {
         for preset in ShortcutPreset.allCases {
             let bindings = GlobalHotkeyService.Action.allCases.map {
@@ -129,6 +321,29 @@ final class HotkeyPreferencesTests: XCTestCase {
         preferences = OverlayPreferences(defaults: defaults)
         XCTAssertEqual(preferences.moveStep, 50)
         XCTAssertEqual(preferences.resizeStep, 200)
+    }
+
+    @MainActor
+    func testAutoScrollSpeedPersistsAndInvalidValuesCannotCreateUnsafeAnimation() throws {
+        let suite = "OverlayScrollSpeed.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = OverlayPreferences(defaults: defaults)
+        XCTAssertEqual(preferences.autoScrollSpeed, 1)
+        let normalDuration = preferences.autoScrollAnimationDuration
+        preferences.autoScrollSpeed = 2
+        XCTAssertEqual(OverlayPreferences(defaults: defaults).autoScrollSpeed, 2)
+        XCTAssertLessThan(preferences.autoScrollAnimationDuration, normalDuration)
+        preferences.autoScrollSpeed = 0
+        XCTAssertEqual(preferences.autoScrollSpeed, 0.25)
+        XCTAssertGreaterThan(preferences.autoScrollAnimationDuration, normalDuration)
+        preferences.autoScrollSpeed = .nan
+        XCTAssertEqual(preferences.autoScrollSpeed, 1)
+        XCTAssertEqual(OverlayPreferences(defaults: defaults).autoScrollSpeed, 1)
+        defaults.set(Double.infinity, forKey: "overlay.autoScrollSpeed")
+        XCTAssertEqual(OverlayPreferences(defaults: defaults).autoScrollSpeed, 1)
+        defaults.set(50.0, forKey: "overlay.autoScrollSpeed")
+        XCTAssertEqual(OverlayPreferences(defaults: defaults).autoScrollSpeed, 2)
     }
 
     @MainActor

@@ -6,48 +6,60 @@ import CopilotCore
 @MainActor
 struct MeetingsView: View {
     @Bindable var app: AppModel
+    var searchQuery = ""
     @State private var deletion: Meeting?
     @State private var deleteChat = false
-    @State private var renamedChat = ""
-    @State private var includeVacancy = false
+    @State private var renameTarget: Meeting?
+    @State private var renameTitle = ""
     @State private var pendingNavigation: Navigation?
     private enum Navigation { case createMeeting, createChat, open(Meeting) }
-    private var visibleMeetings: [Meeting] { app.conversation.savedMeetings }
+    private var visibleMeetings: [Meeting] {
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        return app.conversation.savedMeetings.filter { query.isEmpty || $0.title.localizedStandardContains(query) }
+    }
+    private var meetingDays: [Date] {
+        Array(Set(visibleMeetings.map { Calendar.current.startOfDay(for: $0.createdAt) })).sorted(by: >)
+    }
     var body: some View {
         @Bindable var conversation = app.conversation
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 HMSectionHeader(title: "Список встреч", subtitle: "Всего встреч: \(conversation.savedMeetings.count)")
+                if !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Найдено встреч: \(visibleMeetings.count)").font(.caption).foregroundStyle(.secondary)
+                }
                 HMPanel {
                     HStack(spacing: 12) {
                         TextField("Название встречи, например: Собеседование в Ozon", text: $conversation.newMeetingTitle)
                             .textFieldStyle(.plain).padding(10)
                             .background(DesignTokens.elevated, in: RoundedRectangle(cornerRadius: 8))
                             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(DesignTokens.inputBorder))
-                        Button("Указать информацию о вакансии", systemImage: "briefcase") { includeVacancy.toggle() }
-                            .buttonStyle(.bordered)
                         Button("Создать", systemImage: "plus") { navigate(.createMeeting) }
                             .buttonStyle(HMPrimaryButtonStyle()).disabled(conversation.isLoading)
                     }
-                    if includeVacancy {
-                        HStack { TextField("Компания", text: .constant("")); TextField("Вакансия", text: .constant("")); TextField("Этап", text: .constant("")) }
-                    }
-                }
-                HStack {
-                    Text("Группировать").font(.headline)
-                    Spacer()
-                    Picker("Группировать", selection: .constant("По дате")) { Text("По дате"); Text("По компании") }.frame(width: 150)
+                    Toggle("Сохранять встречу и историю на этом Mac", isOn: $conversation.saveNewMeetingHistory)
+                        .disabled(conversation.isLoading)
+                    Text(conversation.saveNewMeetingHistory
+                         ? "Встреча и поддиалоги будут доступны в списке после перезапуска."
+                         : "История только в памяти: встреча не попадёт в список и исчезнет после смены встречи или выхода.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text(conversation.status).font(.caption).foregroundStyle(.secondary)
                 }
                 if visibleMeetings.isEmpty {
                     HMPanel {
-                        ContentUnavailableView("Встреч пока нет", systemImage: "bubble.left.and.bubble.right", description: Text("Введите название и создайте первую встречу."))
+                        ContentUnavailableView(conversation.savedMeetings.isEmpty ? "Встреч пока нет" : "Встречи не найдены",
+                                               systemImage: "bubble.left.and.bubble.right",
+                                               description: Text(conversation.savedMeetings.isEmpty ? "Введите название и создайте первую встречу." : "Измените или очистите поисковый запрос."))
                             .frame(maxWidth: .infinity, minHeight: 240)
                     }
                 } else {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Сегодня").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                        ForEach(visibleMeetings) { meeting in
-                            meetingRow(meeting)
+                        ForEach(meetingDays, id: \.self) { day in
+                            Text(day.formatted(date: .abbreviated, time: .omitted))
+                                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                            ForEach(visibleMeetings.filter { Calendar.current.isDate($0.createdAt, inSameDayAs: day) }) { meeting in
+                                meetingRow(meeting)
+                            }
                         }
                     }
                 }
@@ -55,6 +67,25 @@ struct MeetingsView: View {
                 .frame(maxWidth: .infinity, alignment: .topLeading)
         }.background(DesignTokens.canvas)
         .task { await conversation.loadLibrary() }
+        .sheet(item: $renameTarget) { meeting in
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Переименовать встречу").font(.title2.bold())
+                TextField("Название", text: $renameTitle)
+                    .textFieldStyle(.roundedBorder).disabled(conversation.isLoading)
+                Text(conversation.status).font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    Button("Отмена") { renameTarget = nil }.keyboardShortcut(.cancelAction)
+                        .disabled(conversation.isLoading)
+                    Spacer()
+                    Button(conversation.isLoading ? "Сохранение…" : "Сохранить") {
+                        Task {
+                            if await conversation.renameMeeting(meeting, to: renameTitle) { renameTarget = nil }
+                        }
+                    }.keyboardShortcut(.defaultAction)
+                        .disabled(conversation.isLoading || renameTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || renameTitle.count > 120)
+                }
+            }.padding(24).frame(width: 420)
+        }
         .confirmationDialog("Продолжить? Незавершённый ответ будет остановлен, черновик вопроса и вложение будут очищены.",
                             isPresented: Binding(get: { pendingNavigation != nil }, set: { if !$0 { pendingNavigation = nil } })) {
             Button("Продолжить и очистить черновик", role: .destructive) {
@@ -81,20 +112,19 @@ struct MeetingsView: View {
             }
             Spacer()
             Label(meeting.updatedAt.formatted(date: .omitted, time: .shortened), systemImage: "clock").font(.caption).foregroundStyle(.secondary)
-            Label("1", systemImage: "bubble.left.and.bubble.right").font(.caption).foregroundStyle(.secondary)
-            Button {
-                Task {
-                    await app.conversation.open(meeting)
-                    if app.conversation.meeting.id == meeting.id { app.overlay.show() }
-                }
-            } label: { Image(systemName: "play.fill") }
+            Label(app.conversation.meetingOverviews[meeting.id].map { "\($0.subchatCount)" } ?? "—", systemImage: "bubble.left.and.bubble.right")
+                .font(.caption).foregroundStyle(.secondary).help("Поддиалоги")
+            Label(app.conversation.meetingOverviews[meeting.id].map { "\($0.messageCount)" } ?? "—", systemImage: "text.bubble")
+                .font(.caption).foregroundStyle(.secondary).help("Сообщения")
+            Button { navigate(.open(meeting)) } label: { Image(systemName: "play.fill") }
                 .buttonStyle(HMPrimaryButtonStyle()).help("Продолжить встречу")
-            Button { } label: { Image(systemName: "link") }.help("Связать с вакансией")
+            Button { } label: { Image(systemName: "link") }.disabled(true).help("Связь с вакансией пока недоступна")
             Button { app.requestedSection = .notes } label: { Image(systemName: "note.text") }.help("Открыть заметки")
-            Button { renamedChat = meeting.title } label: { Image(systemName: "pencil") }.help("Переименовать")
+            Button { renameTitle = meeting.title; renameTarget = meeting } label: { Image(systemName: "pencil") }.help("Переименовать")
             Button { deletion = meeting } label: { Image(systemName: "trash") }.help("Удалить")
         }
         .buttonStyle(.borderless)
+        .disabled(app.conversation.isLoading)
         .padding(13)
         .background(DesignTokens.card, in: RoundedRectangle(cornerRadius: 11))
         .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(DesignTokens.hairline))
@@ -114,13 +144,16 @@ struct MeetingsView: View {
                 await app.conversation.createMeeting()
                 if app.conversation.meeting.id != previousID { app.overlay.show() }
             case .createChat: await app.conversation.createSubchat()
-            case .open(let meeting): await app.conversation.open(meeting)
+            case .open(let meeting):
+                await app.conversation.open(meeting)
+                if app.conversation.meeting.id == meeting.id { app.overlay.show() }
             }
         }
     }
     private func export(markdown: Bool) async {
         do {
-            let data = try await app.conversation.exportCurrent(markdown: markdown)
+            let transcript = try app.transcription.timelineForExport(meetingID: app.conversation.meeting.id)
+            let data = try await app.conversation.exportCurrent(markdown: markdown, transcriptTimeline: transcript)
             let panel = NSSavePanel()
             panel.allowedContentTypes = markdown ? [UTType(filenameExtension: "md") ?? .plainText] : [.json]
             panel.nameFieldStringValue = markdown ? "meeting-export.md" : "meeting-export.json"

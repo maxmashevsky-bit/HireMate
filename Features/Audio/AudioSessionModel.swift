@@ -4,9 +4,20 @@ import CopilotCore
 
 @MainActor @Observable
 final class AudioSessionModel {
-    var inputMode: AudioInputMode = .microphone
-    var questionMode: AudioQuestionMode = .manual
-    var configuration = AudioPipelineConfiguration()
+    var inputMode: AudioInputMode = .microphone {
+        didSet { preferences?.audioInputMode = inputMode }
+    }
+    var questionMode: AudioQuestionMode = .manual {
+        didSet { preferences?.audioQuestionMode = questionMode }
+    }
+    private var storedConfiguration = AudioPipelineConfiguration()
+    var configuration: AudioPipelineConfiguration {
+        get { storedConfiguration }
+        set {
+            storedConfiguration = newValue.bounded()
+            preferences?.audioConfiguration = storedConfiguration
+        }
+    }
     var consent = false
     private(set) var isRunning = false
     private(set) var isStarting = false
@@ -22,6 +33,7 @@ final class AudioSessionModel {
     var status = "Захват выключен"
     var selectedSegmentID: UUID?
     private let capture: any AudioCaptureService
+    private let preferences: PreferencesStore?
     private let pipeline = AudioPipeline()
     private var work: Task<Void, Never>?
     private var opening: Task<Void, Never>?
@@ -33,8 +45,14 @@ final class AudioSessionModel {
     private var lastUIUpdate: [AudioSource: Double] = [:]
     var onSegment: ((AudioSegment) -> Void)?
 
-    init(capture: (any AudioCaptureService)? = nil) {
+    init(capture: (any AudioCaptureService)? = nil, preferences: PreferencesStore? = nil) {
         self.capture = capture ?? NativeAudioCapture()
+        self.preferences = preferences
+        if let preferences {
+            inputMode = preferences.audioInputMode
+            questionMode = preferences.audioQuestionMode
+            storedConfiguration = preferences.audioConfiguration
+        }
         sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in await self?.stop(reason: "Mac переходит в сон. Возобновите захват вручную.") }
         }

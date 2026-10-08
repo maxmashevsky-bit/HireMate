@@ -79,8 +79,7 @@ struct DemoView: View {
                             .buttonStyle(.borderedProminent)
                             .keyboardShortcut(.return, modifiers: .command)
                             .help("Отправить вопрос: ⌘↩")
-                            .disabled(!InputValidation.canSend(model.question) || busy ||
-                                      (model.providerSettings.configuration.mode == .remote && !conversation.remoteConsent))
+                            .disabled(!model.canSendQuestion)
                     }
                 }
     }

@@ -21,6 +21,16 @@ public struct ModelConfiguration: Codable, Sendable, Equatable {
     public var allowLocalEndpoint = false
     public var secretReference = "ai.primary"
     public init() {}
+    public func modelSlotProviderIdentity() throws -> String {
+        let endpoint = try endpoint("chat/completions")
+        guard var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else { throw ProviderError.invalidEndpoint }
+        components.scheme = components.scheme?.lowercased()
+        components.host = components.host?.lowercased()
+        if components.scheme == "https", components.port == 443 { components.port = nil }
+        if components.scheme == "http", components.port == 80 { components.port = nil }
+        guard let identity = components.url?.absoluteString else { throw ProviderError.invalidEndpoint }
+        return identity
+    }
     public func endpoint(_ route: String) throws -> URL {
         guard var components = URLComponents(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines)),
               let scheme = components.scheme?.lowercased(), let host = components.host?.lowercased(),
@@ -48,6 +58,40 @@ public struct ModelConfiguration: Codable, Sendable, Equatable {
         let parts = host.split(separator: ".")
         guard parts.count == 4, parts[0] == "172", let number = Int(parts[1]) else { return false }
         return (16...31).contains(number)
+    }
+}
+
+/// Слот меняет только модель и её возможности в пределах текущего API. Секретов здесь нет.
+public struct ModelSlot: Codable, Equatable, Identifiable, Sendable {
+    public let number: Int
+    public var id: Int { number }
+    public var name: String
+    public var model: String
+    public var supportsVision: Bool
+    public var providerIdentity: String
+    public var maxContextTokens: Int
+    public var reservedOutputTokens: Int
+    public init(number: Int, name: String, model: String, supportsVision: Bool, providerIdentity: String,
+                maxContextTokens: Int = 16_384, reservedOutputTokens: Int = 1_024) {
+        self.number = number; self.name = name; self.model = model; self.supportsVision = supportsVision
+        self.providerIdentity = providerIdentity; self.maxContextTokens = maxContextTokens
+        self.reservedOutputTokens = reservedOutputTokens
+    }
+    public var isValid: Bool {
+        guard (1...5).contains(number), (1...80).contains(name.count),
+              (1...256).contains(model.count), !model.contains("\r"), !model.contains("\n"),
+              (1_024...1_048_576).contains(maxContextTokens), reservedOutputTokens >= 128,
+              reservedOutputTokens < maxContextTokens,
+              let endpoint = URLComponents(string: providerIdentity),
+              endpoint.scheme == "https" || endpoint.scheme == "http", endpoint.host != nil,
+              endpoint.user == nil, endpoint.password == nil, endpoint.query == nil, endpoint.fragment == nil else { return false }
+        return !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    public func matches(_ configuration: ModelConfiguration) -> Bool {
+        configuration.mode == .remote && (try? configuration.modelSlotProviderIdentity()) == providerIdentity &&
+            configuration.textModel == model && configuration.visionEnabled == supportsVision &&
+            configuration.maxContextTokens == maxContextTokens && configuration.reservedOutputTokens == reservedOutputTokens
     }
 }
 

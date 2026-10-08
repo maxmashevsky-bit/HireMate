@@ -45,6 +45,16 @@ struct AppShell: View {
     @Environment(\.openWindow) private var openWindow
     @State private var selection: AppSection = .meetings
     @State private var search = ""
+    private var supportsSearch: Bool { [.meetings, .vacancies, .contexts, .notes].contains(selection) }
+    private var searchPlaceholder: String {
+        switch selection {
+        case .meetings: "Поиск встреч по названию…"
+        case .vacancies: "Компания, вакансия, условия…"
+        case .notes: "Поиск по словам в заметках…"
+        case .contexts: "Поиск контекстов по названию…"
+        default: "Поиск доступен во встречах, вакансиях, контекстах и заметках"
+        }
+    }
     var body: some View {
         VStack(spacing: 0) {
             topBar
@@ -115,7 +125,13 @@ struct AppShell: View {
         ZStack {
             HStack(spacing: 7) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.primary)
-                TextField("Поиск…", text: $search).textFieldStyle(.plain)
+                TextField(searchPlaceholder, text: Binding(get: { search }, set: { search = String($0.prefix(200)) }))
+                    .textFieldStyle(.plain).disabled(!supportsSearch)
+                    .accessibilityLabel("Поиск в текущем разделе")
+                if !search.isEmpty, supportsSearch {
+                    Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain).accessibilityLabel("Очистить поиск")
+                }
             }
             .padding(.horizontal, 11).frame(width: 360, height: 31)
             .background(DesignTokens.elevated, in: RoundedRectangle(cornerRadius: 8))
@@ -133,15 +149,15 @@ struct AppShell: View {
 
     @ViewBuilder private var detail: some View {
         switch selection {
-        case .notes: NotesView(app: model)
+        case .notes: NotesView(app: model, searchQuery: search)
         case .actions: QuickActionsView(app: model)
         case .screenshot: ScreenshotView(app: model)
         case .transcription: TranscriptionView(app: model)
         case .audio: AudioCaptureView(audio: model.audio)
-        case .meetings: MeetingsView(app: model)
-        case .vacancies: TrackerView(app: model)
+        case .meetings: MeetingsView(app: model, searchQuery: search)
+        case .vacancies: TrackerView(app: model, searchQuery: search)
         case .home: DemoView(model: model)
-        case .contexts: ContextEditorView(app: model)
+        case .contexts: ContextEditorView(app: model, searchQuery: search)
         case .settings: SettingsView(model: model)
         case .diagnostics: DiagnosticsView(model: model)
         case .practice: PracticeDashboard(model: model)
@@ -197,6 +213,7 @@ private struct PracticeDashboard: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 HMSectionHeader(title: "Тренировки", subtitle: "Настройте пробное собеседование под выбранный профиль")
+                Text("Тренировочное интервью, таймер и оценка ответов ещё не реализованы.").foregroundStyle(.secondary)
                 HStack(alignment: .top, spacing: 16) {
                     HMPanel("Новая тренировка", subtitle: "Вопросы формируются отдельно для каждого профиля") {
                         Picker("Профиль", selection: $model.profile) { ForEach(ProfileID.allCases) { Text($0.title).tag($0) } }
@@ -205,8 +222,8 @@ private struct PracticeDashboard: View {
                         LabeledContent("Длительность", value: "\(Int(duration)) мин")
                         Slider(value: $duration, in: 15...90, step: 15)
                         Toggle("Показывать подсказки после ответа", isOn: .constant(true))
-                        Button("Начать тренировку", systemImage: "play.fill") { model.overlay.toggle() }.buttonStyle(HMPrimaryButtonStyle())
-                    }
+                        Button("Начать тренировку", systemImage: "play.fill") {}.buttonStyle(HMPrimaryButtonStyle())
+                    }.disabled(true)
                     HMPanel("Последние результаты") {
                         metric("Структура ответа", "—")
                         metric("Техническая точность", "—")
@@ -227,6 +244,7 @@ private struct AnalysisDashboard: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 HMSectionHeader(title: "Анализ интервью", subtitle: "Разберите запись, расшифровку или сохранённую встречу")
+                Text("Выбор источника, AI-анализ и PDF-отчёт ещё не реализованы.").foregroundStyle(.secondary)
                 HMPanel("Источник") {
                     HStack {
                         Button("Выбрать встречу", systemImage: "bubble.left.and.bubble.right") {}
@@ -236,12 +254,12 @@ private struct AnalysisDashboard: View {
                     Picker("Глубина анализа", selection: $detailLevel) { ForEach(["Кратко", "Подробно", "По компетенциям"], id: \.self) { Text($0) } }
                     Toggle("Выделить сильные ответы и зоны роста", isOn: .constant(true))
                     Button("Запустить анализ", systemImage: "sparkles") {}.buttonStyle(HMPrimaryButtonStyle())
-                }
+                }.disabled(true)
                 HStack(spacing: 16) {
                     HMPanel("Сильные стороны") { Text("Результаты появятся после выбора источника.").foregroundStyle(.secondary) }
                     HMPanel("Зоны роста") { Text("Здесь будут конкретные рекомендации.").foregroundStyle(.secondary) }
                 }
-                HStack { Spacer(); Button("Экспортировать PDF", systemImage: "square.and.arrow.up") {} }
+                HStack { Spacer(); Button("Экспортировать PDF", systemImage: "square.and.arrow.up") {}.disabled(true) }
             }.padding(24).frame(maxWidth: DesignTokens.contentWidth)
         }.background(DesignTokens.canvas)
     }
@@ -256,18 +274,19 @@ private struct ResumeDashboard: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     HMSectionHeader(title: "Резюме", subtitle: "Подготовьте версию под конкретную вакансию")
+                    Text("Редактор, сохранение и PDF-экспорт резюме ещё не реализованы.").foregroundStyle(.secondary)
                     HMPanel("Основное") {
                         TextField("Целевая роль", text: $role)
                         Picker("Язык", selection: $language) { Text("Русский"); Text("English") }
                         TextEditor(text: $summary).frame(minHeight: 140)
-                    }
+                    }.disabled(true)
                     HMPanel("Разделы") {
                         Button("Опыт", systemImage: "briefcase") {}
                         Button("Навыки", systemImage: "hammer") {}
                         Button("Образование", systemImage: "graduationcap") {}
                         Button("Проекты", systemImage: "shippingbox") {}
-                    }
-                    HStack { Button("Сохранить") {}; Button("Экспортировать PDF", systemImage: "doc.richtext") {}.buttonStyle(HMPrimaryButtonStyle()) }
+                    }.disabled(true)
+                    HStack { Button("Сохранить") {}.disabled(true); Button("Экспортировать PDF", systemImage: "doc.richtext") {}.buttonStyle(HMPrimaryButtonStyle()).disabled(true) }
                 }.padding(24)
             }
             VStack(alignment: .leading, spacing: 14) {

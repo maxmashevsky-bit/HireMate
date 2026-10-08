@@ -1,15 +1,14 @@
 import Foundation
 import GRDB
 
-public actor GRDBMeetingRepository: MeetingRepository, TrackerRepository {
+public actor GRDBMeetingRepository: MeetingRepository, TrackerRepository, TranscriptRepository {
     private var database: DatabaseQueue?
     private let directory: URL?
     public init(directory: URL? = nil) { self.directory = directory }
 
     func connection() throws -> DatabaseQueue {
         if let database { return database }
-        let base = try directory ?? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-            .appendingPathComponent("dev.maxmashevsky.MaxInterviewCopilot/Database", isDirectory: true)
+        let base = directory ?? AppStoragePaths.standard.directory(for: .database)
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         var configuration = Configuration()
         configuration.foreignKeysEnabled = true
@@ -79,6 +78,24 @@ public actor GRDBMeetingRepository: MeetingRepository, TrackerRepository {
                                arguments: [stage.id.uuidString, stage.position, try JSONEncoder().encode(stage)])
             }
         }
+        migrator.registerMigration("v4_meeting_transcripts") { db in
+            try db.create(table: "meeting_transcripts") { t in
+                t.column("meetingID", .text).primaryKey().references("meetings", onDelete: .cascade)
+                t.column("payload", .blob).notNull()
+            }
+        }
+        migrator.registerMigration("v5_note_library_paging") { db in
+            try db.alter(table: "notes") { t in t.add(column: "folder", .text) }
+            // Обновляется только индексируемая метаинформация; исходные payload и FTS не переписываются.
+            let cursor = try Row.fetchCursor(db, sql: "SELECT id,payload FROM notes")
+            while let row = try cursor.next() {
+                let id: String = row["id"]
+                let data: Data = row["payload"]
+                let note = try JSONDecoder().decode(Note.self, from: data)
+                try db.execute(sql: "UPDATE notes SET folder=? WHERE id=?", arguments: [note.folder, id])
+            }
+            try db.execute(sql: "CREATE INDEX note_library_order ON notes(profileID,isArchived,folder,isPinned DESC,updatedAt DESC,id)")
+        }
         try migrator.migrate(queue)
         database = queue
         return queue
@@ -109,6 +126,33 @@ public actor GRDBMeetingRepository: MeetingRepository, TrackerRepository {
                            arguments: [meeting.id.uuidString, meeting.profileID.rawValue, meeting.createdAt.timeIntervalSince1970, meetingPayload])
             try db.execute(sql: "INSERT INTO subchats(id,meetingID,createdAt,payload) VALUES (?,?,?,?)",
                            arguments: [initialChat.id.uuidString, meeting.id.uuidString, initialChat.createdAt.timeIntervalSince1970, chatPayload])
+        }
+    }
+    public func meetingOverviews(profile: ProfileID) async throws -> [MeetingOverview] {
+        try await connection().read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT m.payload, COUNT(DISTINCT s.id) AS chatCount, COUNT(msg.id) AS messageCount
+                FROM meetings m LEFT JOIN subchats s ON s.meetingID=m.id
+                LEFT JOIN messages msg ON msg.subchatID=s.id
+                WHERE m.profileID=? GROUP BY m.id ORDER BY m.createdAt DESC
+                """, arguments: [profile.rawValue]).map { row in
+                    let payload: Data = row["payload"]
+                    return MeetingOverview(meeting: try JSONDecoder().decode(Meeting.self, from: payload),
+                                           subchatCount: row["chatCount"], messageCount: row["messageCount"])
+                }
+        }
+    }
+    public func renameMeeting(id: UUID, profile: ProfileID, title: String) async throws -> Meeting {
+        let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty, title.count <= 120 else { throw LocalStoreError.invalidData }
+        return try await connection().write { db in
+            guard let data = try Data.fetchOne(db, sql: "SELECT payload FROM meetings WHERE id=? AND profileID=?",
+                                               arguments: [id.uuidString, profile.rawValue]) else { throw LocalStoreError.missingRecord }
+            var meeting = try JSONDecoder().decode(Meeting.self, from: data)
+            meeting.title = title; meeting.updatedAt = max(meeting.updatedAt, Date())
+            try db.execute(sql: "UPDATE meetings SET payload=? WHERE id=? AND profileID=?",
+                           arguments: [try JSONEncoder().encode(meeting), id.uuidString, profile.rawValue])
+            return meeting
         }
     }
     public func subchats(meetingID: UUID) async throws -> [Subchat] {
@@ -142,10 +186,42 @@ public actor GRDBMeetingRepository: MeetingRepository, TrackerRepository {
             guard exists else { throw LocalStoreError.missingRecord }
             try db.execute(sql: "INSERT INTO messages(id,subchatID,createdAt,payload) VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload WHERE messages.subchatID=excluded.subchatID",
                            arguments: [message.id.uuidString, message.subchatID.uuidString, message.createdAt.timeIntervalSince1970, payload])
+            if let data = try Data.fetchOne(db, sql: "SELECT payload FROM meetings WHERE id=?", arguments: [meetingID.uuidString]) {
+                var parent = try JSONDecoder().decode(Meeting.self, from: data)
+                parent.updatedAt = max(parent.updatedAt, message.createdAt)
+                try db.execute(sql: "UPDATE meetings SET payload=? WHERE id=?",
+                               arguments: [try JSONEncoder().encode(parent), meetingID.uuidString])
+            }
         }
     }
     public func deleteMeeting(id: UUID) async throws {
         try await connection().write { db in try db.execute(sql: "DELETE FROM meetings WHERE id=?", arguments: [id.uuidString]) }
+    }
+    public func transcriptTimeline(meetingID: UUID, profile: ProfileID) async throws -> TranscriptTimeline {
+        try await connection().read { db in
+            let exists = try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM meetings WHERE id=? AND profileID=?)",
+                                           arguments: [meetingID.uuidString, profile.rawValue]) ?? false
+            guard exists else { throw LocalStoreError.missingRecord }
+            guard let data = try Data.fetchOne(db, sql: "SELECT payload FROM meeting_transcripts WHERE meetingID=?",
+                                               arguments: [meetingID.uuidString]) else { return TranscriptTimeline() }
+            guard data.count <= 300_000, let timeline = try? JSONDecoder().decode(TranscriptTimeline.self, from: data) else {
+                throw LocalStoreError.invalidData
+            }
+            return timeline
+        }
+    }
+    public func saveTranscriptTimeline(_ timeline: TranscriptTimeline, meetingID: UUID, profile: ProfileID) async throws {
+        let data = try JSONEncoder().encode(timeline)
+        guard data.count <= 300_000, (try? JSONDecoder().decode(TranscriptTimeline.self, from: data)) != nil else {
+            throw LocalStoreError.invalidData
+        }
+        try await connection().write { db in
+            let exists = try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM meetings WHERE id=? AND profileID=?)",
+                                           arguments: [meetingID.uuidString, profile.rawValue]) ?? false
+            guard exists else { throw LocalStoreError.missingRecord }
+            try db.execute(sql: "INSERT INTO meeting_transcripts(meetingID,payload) VALUES (?,?) ON CONFLICT(meetingID) DO UPDATE SET payload=excluded.payload",
+                           arguments: [meetingID.uuidString, data])
+        }
     }
     public func exportMeeting(id: UUID) async throws -> Data {
         struct Archive: Encodable { let version: Int; let meeting: Meeting; let subchats: [Subchat]; let messages: [ChatMessage] }

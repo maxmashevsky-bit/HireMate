@@ -34,12 +34,10 @@ struct MaxInterviewCopilotApp: App {
 @MainActor
 private struct MenuContent: View {
     let model: AppModel
-    @Environment(\.openWindow) private var openWindow
     var body: some View {
         Text(model.providerSettings.configuration.mode == .demo ? "Локальное демо • без сети" : "Собственный API • отправка по команде")
         Button("Открыть главное окно") {
-            openWindow(id: "main")
-            NSApplication.shared.activate(ignoringOtherApps: true)
+            model.overlay.openMain()
         }
         if model.audio.isRunning {
             Text("Захват звука включён")

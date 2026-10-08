@@ -20,11 +20,12 @@ final class AppModel {
     let secrets: any SecureSecretStore
     let conversation: ConversationModel
     let notes: NotesModel
+    let meetingNotes: NotesModel
     let tracker: TrackerModel
     private let databaseBenchmark: LocalDatabaseBenchmark
     private let logger = Logger(subsystem: "dev.maxmashevsky.MaxInterviewCopilot", category: "lifecycle")
     var theme: AppTheme { didSet { preferences.theme = theme } }
-    var profile: ProfileID { didSet { preferences.profile = profile; transcription.reset(); screenshot.clear(); speech.stop(); pendingQuickAction = nil; notes.activateProfile(profile); conversation.activateProfile(profile)
+    var profile: ProfileID { didSet { preferences.profile = profile; transcription.reset(); screenshot.clear(); speech.stop(); pendingQuickAction = nil; notes.activateProfile(profile); meetingNotes.activateProfile(profile); conversation.activateProfile(profile)
         Task { await audio.stop(reason: "Профиль изменён. Захват остановлен."); await audio.clear() }
     } }
     var question: String { get { conversation.draft } set { conversation.draft = newValue } }
@@ -46,18 +47,20 @@ final class AppModel {
          audioCapture: (any AudioCaptureService)? = nil,
          transcriptionServiceFactory: ((ModelConfiguration) -> any TranscriptionService)? = nil,
          providerFactory: ((ModelConfiguration) -> any StreamingLLMProvider)? = nil) {
-        let resolvedPreferences = preferences ?? PreferencesStore()
+        let resolvedPreferences = preferences ?? PreferencesStore.shared
         let resolvedNetwork = NetworkClient()
         let resolvedRepository = repository ?? GRDBMeetingRepository()
         self.preferences = resolvedPreferences
         self.permissions = permissions ?? MacPermissionService()
         self.secrets = secrets ?? KeychainSecretStore()
         self.network = resolvedNetwork
-        self.audio = AudioSessionModel(capture: audioCapture)
+        self.audio = AudioSessionModel(capture: audioCapture, preferences: resolvedPreferences)
         self.transcription = TranscriptionModel(secrets: self.secrets, network: resolvedNetwork,
-                                                serviceFactory: transcriptionServiceFactory)
+                                                serviceFactory: transcriptionServiceFactory,
+                                                transcriptRepository: resolvedRepository as? any TranscriptRepository)
         self.databaseBenchmark = LocalDatabaseBenchmark(repository: resolvedRepository)
         self.notes = NotesModel(profile: resolvedPreferences.profile, repository: resolvedRepository)
+        self.meetingNotes = NotesModel(profile: resolvedPreferences.profile, repository: resolvedRepository)
         self.tracker = TrackerModel(repository: trackerRepository ?? GRDBMeetingRepository())
         self.conversation = ConversationModel(profileID: resolvedPreferences.profile, repository: resolvedRepository,
                                               secrets: self.secrets, network: resolvedNetwork,
@@ -67,6 +70,19 @@ final class AppModel {
         showOnboarding = !resolvedPreferences.onboardingCompleted
         refreshPermissions()
         overlay.connect(model: self)
+        notes.onLibraryChanged = { [weak self] in
+            guard let self else { return }
+            Task { await meetingNotes.refresh() }
+        }
+        transcription.activateMeeting(conversation.meeting.id, profile: conversation.meeting.profileID,
+                                      persisted: !conversation.meeting.isEphemeral)
+        conversation.onMeetingActivated = { [weak self] id in
+            guard let self else { return }
+            transcription.activateMeeting(id, profile: conversation.meeting.profileID,
+                                          persisted: !conversation.meeting.isEphemeral)
+            screenshot.clear(); speech.stop(); pendingQuickAction = nil
+            Task { await audio.stop(reason: "Встреча изменена. Захват остановлен."); await audio.clear() }
+        }
         audio.onSegment = { [weak self] segment in
             self?.transcription.enqueueLive(segment)
         }
@@ -94,13 +110,29 @@ final class AppModel {
     }
     func requestScreen() { permissions.requestScreen(); refreshPermissions() }
     func finishOnboarding() { preferences.onboardingCompleted = true; showOnboarding = false }
+    var canSendQuestion: Bool {
+        !conversation.isLoading && (!isGenerating || preferences.cancelGenerationOnSend) &&
+        InputValidation.canSend(question) &&
+        (providerSettings.configuration.mode == .demo || conversation.remoteConsent)
+    }
+    func cycleModelsFromShortcut() {
+        guard !isGenerating, !conversation.isLoading else {
+            conversation.status = "Дождитесь завершения ответа или остановите его перед переключением модели."
+            return
+        }
+        providerSettings.cycleModelSlot()
+        conversation.status = providerSettings.message
+    }
     func send(includeScreenshot: Bool = true) {
+        guard canSendQuestion else { return }
         speech.stop()
         conversation.send(configuration: providerSettings.configuration,
                           transcriptContext: transcription.contextForRequest(),
-                          includeAttachedImage: includeScreenshot)
+                          includeAttachedImage: includeScreenshot,
+                          replacingCurrentGeneration: preferences.cancelGenerationOnSend,
+                          retainingPartialAnswer: preferences.retainCancelledAnswer)
     }
-    func stop() { conversation.cancel(); speech.stop() }
+    func stop() { conversation.cancel(retainingPartialAnswer: preferences.retainCancelledAnswer); speech.stop() }
     func resetCurrentContext() {
         conversation.resetToEphemeralConversation()
         transcription.reset()

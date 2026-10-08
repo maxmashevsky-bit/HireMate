@@ -7,7 +7,7 @@ struct HotkeyBinding: Hashable {
 }
 
 enum HotkeyKey: String, CaseIterable, Identifiable {
-    case b, w, d, g, h, n, k, l, p, x, r, a, s, t
+    case b, w, d, g, h, n, k, l, p, x, r, a, s, t, m
     case one, two, three, four, five
     case leftBracket, rightBracket, `return`
     case left, right, up, down
@@ -15,6 +15,11 @@ enum HotkeyKey: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
+        case .one: "1"
+        case .two: "2"
+        case .three: "3"
+        case .four: "4"
+        case .five: "5"
         case .leftBracket: "["
         case .rightBracket: "]"
         case .return: "Return"
@@ -41,6 +46,7 @@ enum HotkeyKey: String, CaseIterable, Identifiable {
         case .a: UInt32(kVK_ANSI_A)
         case .s: UInt32(kVK_ANSI_S)
         case .t: UInt32(kVK_ANSI_T)
+        case .m: UInt32(kVK_ANSI_M)
         case .one: UInt32(kVK_ANSI_1)
         case .two: UInt32(kVK_ANSI_2)
         case .three: UInt32(kVK_ANSI_3)
@@ -81,6 +87,7 @@ final class GlobalHotkeyService {
         case previousChat, nextChat, newChat, toggleChatList, resetContext
         case toggleAudio, toggleAutomaticQuestions, toggleLastSpeech, toggleAutomaticSpeech
         case toggleTeleprompter, toggleTeleprompterClickThrough, scrollUp, scrollDown
+        case cycleModels
         var defaultKey: HotkeyKey {
             switch self {
             case .quick1: .one
@@ -110,12 +117,13 @@ final class GlobalHotkeyService {
             case .toggleLastSpeech, .toggleAutomaticSpeech: .s
             case .toggleTeleprompter: .t
             case .toggleTeleprompterClickThrough: .w
+            case .cycleModels: .m
             }
         }
         var needsShift: Bool {
             [.narrower, .wider, .shorter, .taller, .regionScreenshot, .sendWithoutScreenshot,
              .previousChat, .nextChat, .toggleChatList, .resetContext, .toggleAutomaticQuestions,
-             .toggleLastSpeech, .toggleTeleprompter, .toggleTeleprompterClickThrough].contains(self)
+             .toggleLastSpeech, .toggleTeleprompter, .toggleTeleprompterClickThrough, .cycleModels].contains(self)
         }
         var needsAlternateBase: Bool { [.toggleAutomaticSpeech, .scrollUp, .scrollDown].contains(self) }
         var title: String {
@@ -131,8 +139,14 @@ final class GlobalHotkeyService {
             case .cancel: "Остановить ответ"
             case .dim: "Меньше непрозрачность"
             case .brighten: "Больше непрозрачность"
-            case .left, .right, .up, .down: "Перемещение окна"
-            case .narrower, .wider, .shorter, .taller: "Изменение размера"
+            case .left: "Переместить окно влево"
+            case .right: "Переместить окно вправо"
+            case .up: "Переместить окно вверх"
+            case .down: "Переместить окно вниз"
+            case .narrower: "Уменьшить ширину окна"
+            case .wider: "Увеличить ширину окна"
+            case .shorter: "Уменьшить высоту окна"
+            case .taller: "Увеличить высоту окна"
             case .screenshot: "Снимок экрана"
             case .regionScreenshot: "Снимок области"
             case .notes: "Заметки"
@@ -149,7 +163,9 @@ final class GlobalHotkeyService {
             case .toggleAutomaticSpeech: "Автоматическая озвучка ответов"
             case .toggleTeleprompter: "Показать / скрыть телесуфлёр"
             case .toggleTeleprompterClickThrough: "Кликабельность телесуфлёра"
-            case .scrollUp, .scrollDown: "Прокрутка ответа"
+            case .scrollUp: "Прокрутить ответ вверх"
+            case .scrollDown: "Прокрутить ответ вниз"
+            case .cycleModels: "Следующий модельный слот"
             }
         }
     }

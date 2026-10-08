@@ -10,6 +10,164 @@ private final class UnusedSecrets: SecureSecretStore {
 
 final class ConversationFlowTests: XCTestCase {
     @MainActor
+    func testMeetingHistoryChoiceRenameAndCountsSurviveModelAndDatabaseRecreation() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = GRDBMeetingRepository(directory: directory)
+        let first = ConversationModel(profileID: .technical, repository: repository,
+                                       secrets: UnusedSecrets(), network: NetworkClient())
+        first.newMeetingTitle = "Разговор в памяти"
+        await first.createMeeting()
+        XCTAssertTrue(first.meeting.isEphemeral)
+        XCTAssertTrue(first.savedMeetings.isEmpty)
+        first.saveNewMeetingHistory = true
+        first.newMeetingTitle = "Первая встреча"
+        await first.createMeeting()
+        let meeting = first.meeting
+        let firstChat = first.activeChatID
+        try await repository.saveMessage(ChatMessage(subchatID: firstChat, role: .user, content: "Вопрос A"), meetingID: meeting.id)
+        first.newChatTitle = "Второй"
+        await first.createSubchat()
+        let secondChat = first.activeChatID
+        try await repository.saveMessage(ChatMessage(subchatID: secondChat, role: .user, content: "Вопрос B"), meetingID: meeting.id)
+        await first.loadLibrary()
+        XCTAssertEqual(first.meetingOverviews[meeting.id]?.subchatCount, 2)
+        XCTAssertEqual(first.meetingOverviews[meeting.id]?.messageCount, 2)
+        let renamed = await first.renameMeeting(meeting, to: "  Сохранённое название  ")
+        XCTAssertTrue(renamed)
+        XCTAssertEqual(first.meeting.title, "Сохранённое название")
+        let reopenedRepository = GRDBMeetingRepository(directory: directory)
+        let reopened = ConversationModel(profileID: .technical, repository: reopenedRepository,
+                                         secrets: UnusedSecrets(), network: NetworkClient())
+        await reopened.loadLibrary()
+        let saved = try XCTUnwrap(reopened.savedMeetings.first)
+        XCTAssertEqual(saved.id, meeting.id)
+        XCTAssertEqual(saved.title, "Сохранённое название")
+        XCTAssertEqual(reopened.meetingOverviews[saved.id]?.subchatCount, 2)
+        XCTAssertEqual(reopened.meetingOverviews[saved.id]?.messageCount, 2)
+        await reopened.open(saved)
+        XCTAssertEqual(reopened.messages.map(\.content), ["Вопрос A"])
+        reopened.requestSwitch(secondChat)
+        try await waitUntil { reopened.activeChatID == secondChat && !reopened.isLoading }
+        XCTAssertEqual(reopened.messages.map(\.content), ["Вопрос B"])
+        let invalidRename = await reopened.renameMeeting(saved, to: " \n")
+        XCTAssertFalse(invalidRename)
+        XCTAssertEqual(reopened.meeting.title, "Сохранённое название")
+    }
+
+    @MainActor
+    func testInvalidNewMeetingTitleDoesNotCancelCurrentResponseOrClearDraft() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let model = ConversationModel(profileID: .technical, repository: GRDBMeetingRepository(directory: directory),
+            secrets: UnusedSecrets(), network: NetworkClient(), providerFactory: { _ in UnfinishedAnswerProvider() })
+        model.draft = "Текущий вопрос"
+        model.send(configuration: ModelConfiguration())
+        try await waitUntil { !model.streamingText.isEmpty }
+        let originalID = model.meeting.id
+        model.draft = "Следующий черновик"
+        for invalid in [" \n", String(repeating: "я", count: 121)] {
+            model.newMeetingTitle = invalid
+            await model.createMeeting()
+            XCTAssertEqual(model.meeting.id, originalID)
+            XCTAssertEqual(model.draft, "Следующий черновик")
+            XCTAssertTrue(model.isGenerating)
+        }
+        model.cancel(retainingPartialAnswer: false)
+        await model.finishForTermination()
+    }
+
+    @MainActor
+    func testResendOptionReplacesStreamAndPreservesNextQuestion() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let model = ConversationModel(profileID: .technical, repository: GRDBMeetingRepository(directory: directory),
+            secrets: UnusedSecrets(), network: NetworkClient(), providerFactory: { _ in UnfinishedAnswerProvider(text: nil) })
+        model.draft = "Первый вопрос"
+        model.send(configuration: ModelConfiguration())
+        try await waitUntil { model.streamingText == "Первый вопрос" }
+        model.draft = "Второй вопрос"
+        model.send(configuration: ModelConfiguration())
+        XCTAssertEqual(model.streamingText, "Первый вопрос")
+        XCTAssertEqual(model.draft, "Второй вопрос")
+        XCTAssertEqual(model.messages.count, 1)
+        model.send(configuration: ModelConfiguration(), replacingCurrentGeneration: true, retainingPartialAnswer: false)
+        try await waitUntil { model.streamingText == "Второй вопрос" }
+        model.cancel(retainingPartialAnswer: true)
+        await model.finishForTermination()
+        XCTAssertEqual(model.messages.map(\.content), ["Первый вопрос", "Второй вопрос", "Второй вопрос"])
+        XCTAssertEqual(model.messages.map(\.role), [.user, .user, .assistant])
+        XCTAssertEqual(model.messages.last?.state, .cancelled)
+    }
+
+    @MainActor
+    func testInvalidOrUnconsentedResendDoesNotCancelExistingAnswer() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let model = ConversationModel(profileID: .technical, repository: GRDBMeetingRepository(directory: directory),
+            secrets: UnusedSecrets(), network: NetworkClient(), providerFactory: { _ in UnfinishedAnswerProvider() })
+        model.draft = "Первый вопрос"
+        model.send(configuration: ModelConfiguration())
+        try await waitUntil { !model.streamingText.isEmpty }
+        for invalid in ["   ", String(repeating: "а", count: 4001)] {
+            model.draft = invalid
+            model.send(configuration: ModelConfiguration(), replacingCurrentGeneration: true)
+            XCTAssertTrue(model.isGenerating)
+            XCTAssertEqual(model.streamingText, "Частичный ответ")
+        }
+        model.draft = "Второй вопрос"
+        var remote = ModelConfiguration(); remote.mode = .remote
+        model.send(configuration: remote, replacingCurrentGeneration: true)
+        XCTAssertTrue(model.isGenerating)
+        XCTAssertEqual(model.streamingText, "Частичный ответ")
+        XCTAssertEqual(model.messages.count, 1)
+        model.draft = ""
+        model.cancel(retainingPartialAnswer: false)
+        await model.finishForTermination()
+    }
+
+    @MainActor
+    func testManualCancellationDiscardsPartialAnswerFromMemoryAndSQLite() async throws {
+        try await checkManualCancellation(retaining: false)
+    }
+
+    @MainActor
+    func testManualCancellationRetainsPartialAnswerWithoutDuplicateWrites() async throws {
+        try await checkManualCancellation(retaining: true)
+    }
+
+    @MainActor
+    private func checkManualCancellation(retaining: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = GRDBMeetingRepository(directory: directory)
+        let model = ConversationModel(profileID: .technical, repository: repository,
+            secrets: UnusedSecrets(), network: NetworkClient(), providerFactory: { _ in UnfinishedAnswerProvider() })
+        model.saveNewMeetingHistory = true
+        await model.createMeeting()
+        model.draft = "Проверочный вопрос"
+        model.send(configuration: ModelConfiguration())
+        try await waitUntil { !model.streamingText.isEmpty }
+        XCTAssertTrue(model.isGenerating)
+        model.cancel(retainingPartialAnswer: retaining)
+        model.cancel(retainingPartialAnswer: retaining)
+        await model.finishForTermination()
+        XCTAssertFalse(model.isGenerating)
+        XCTAssertTrue(model.streamingText.isEmpty)
+        XCTAssertEqual(model.messages.filter { $0.role == .assistant }.count, retaining ? 1 : 0)
+        let saved = try await repository.messages(subchatID: model.activeChatID, meetingID: model.meeting.id)
+        XCTAssertEqual(saved.filter { $0.role == .user }.map(\.content), ["Проверочный вопрос"])
+        let answers = saved.filter { $0.role == .assistant }
+        XCTAssertEqual(answers.count, retaining ? 1 : 0)
+        if retaining {
+            XCTAssertEqual(answers.first?.content, "Частичный ответ")
+            XCTAssertEqual(answers.first?.state, .cancelled)
+        }
+        await model.open(model.meeting)
+        XCTAssertEqual(model.messages.filter { $0.role == .assistant }.count, retaining ? 1 : 0)
+    }
+
+    @MainActor
     func testSavedMeetingKeepsBoundedWindowButExportsCompleteHistory() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -383,6 +541,16 @@ final class ConversationFlowTests: XCTestCase {
         XCTAssertTrue(model.draft.isEmpty)
         XCTAssertTrue(model.messages.isEmpty)
         XCTAssertTrue(model.savedMeetings.contains(where: { $0.id == savedID }))
+    }
+}
+
+private struct UnfinishedAnswerProvider: StreamingLLMProvider {
+    var text: String? = "Частичный ответ"
+    func stream(_ request: GenerationRequest) -> AsyncThrowingStream<LLMEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(.started(request.id))
+            continuation.yield(.textDelta(text ?? request.currentQuestion))
+        }
     }
 }
 

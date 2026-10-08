@@ -5,8 +5,10 @@ public struct MeetingArchive: Codable, Sendable {
     public let meeting: Meeting
     public let subchats: [Subchat]
     public let messages: [ChatMessage]
-    public init(meeting: Meeting, subchats: [Subchat], messages: [ChatMessage]) {
+    public let transcriptTimeline: TranscriptTimeline?
+    public init(meeting: Meeting, subchats: [Subchat], messages: [ChatMessage], transcriptTimeline: TranscriptTimeline? = nil) {
         version = 1; self.meeting = meeting
+        self.transcriptTimeline = transcriptTimeline
         self.subchats = subchats.filter { $0.meetingID == meeting.id }
         let ids = Set(self.subchats.map(\.id))
         self.messages = messages.filter { ids.contains($0.subchatID) }
@@ -18,6 +20,16 @@ public struct MeetingArchive: Codable, Sendable {
         var lines = ["# \(heading(meeting.title))", "", "Профиль: \(meeting.profileID.title)",
                      "Дата: \(meeting.createdAt.ISO8601Format())", "",
                      "Экспорт текста. Изображения, аудио и ключи API в файл не включены.", ""]
+        if let timeline = transcriptTimeline, !timeline.entries.isEmpty || timeline.compactedCount > 0 {
+            lines += ["## Расшифровки", "", "Ограниченная локальная история: последние реплики и дословная выжимка старых. Полный звук в файл не включён.", ""]
+            let summary = timeline.compactedSummary()
+            if !summary.isEmpty { lines += [summary, ""] }
+            for entry in timeline.entries {
+                let demo = entry.isDemo == true ? " · учебный пример, демо" : ""
+                let time = entry.recordedAt.map { " · " + $0.ISO8601Format() } ?? ""
+                lines += ["### \(entry.speaker.title)\(demo)\(time)", "", entry.text, ""]
+            }
+        }
         for chat in subchats where chat.meetingID == meeting.id {
             lines += ["## \(heading(chat.title))", ""]
             let history = messages.filter { $0.subchatID == chat.id }

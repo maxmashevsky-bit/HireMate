@@ -43,6 +43,14 @@ public struct Subchat: Codable, Identifiable, Sendable, Equatable {
         id = UUID(); self.meetingID = meetingID; self.title = title; createdAt = Date(); updatedAt = createdAt
     }
 }
+public struct MeetingOverview: Sendable, Equatable {
+    public let meeting: Meeting
+    public let subchatCount: Int
+    public let messageCount: Int
+    public init(meeting: Meeting, subchatCount: Int, messageCount: Int) {
+        self.meeting = meeting; self.subchatCount = subchatCount; self.messageCount = messageCount
+    }
+}
 public enum MessageRole: String, Codable, Sendable { case system, user, assistant }
 public enum MessageState: String, Codable, Sendable { case complete, cancelled, failed }
 public struct ChatMessage: Codable, Identifiable, Sendable, Equatable {
@@ -53,9 +61,10 @@ public struct ChatMessage: Codable, Identifiable, Sendable, Equatable {
     public var state: MessageState
     public let createdAt: Date
     public var isDemo: Bool
-    public init(subchatID: UUID, role: MessageRole, content: String, state: MessageState = .complete, isDemo: Bool = false) {
+    public init(subchatID: UUID, role: MessageRole, content: String, state: MessageState = .complete, isDemo: Bool = false,
+                createdAt: Date = Date()) {
         id = UUID(); self.subchatID = subchatID; self.role = role; self.content = content
-        self.state = state; createdAt = Date(); self.isDemo = isDemo
+        self.state = state; self.createdAt = createdAt; self.isDemo = isDemo
     }
 }
 

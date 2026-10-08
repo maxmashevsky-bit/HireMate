@@ -215,6 +215,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     func startDragging(_ event: NSEvent) { panel?.performDrag(with: event) }
+    var captureExclusionRequested: Bool { panel?.sharingType == NSWindow.SharingType.none }
 
     func testCaptureCompatibility() {
         guard compatibilityTask == nil else { return }
@@ -223,10 +224,12 @@ final class OverlayController: NSObject, NSWindowDelegate {
             return
         }
         let wasVisible = isVisible
+        let shouldRestoreMainWindow = !wasVisible && mainWindow?.isVisible == true
         if !wasVisible { show() }
         guard let panel, let displayID = panel.screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else {
             compatibilityResult = .failed("Не удалось определить дисплей рабочего окна.")
-            if !wasVisible { hide() }
+            if shouldRestoreMainWindow { openMain() }
+            else if !wasVisible { hide() }
             return
         }
         compatibilityResult = .running
@@ -241,7 +244,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
                 isCompatibilityMarkerVisible = false
                 applyOpacity()
                 compatibilityTask = nil
-                if !wasVisible { hide() }
+                if shouldRestoreMainWindow, model != nil { openMain() }
+                else if !wasVisible { hide() }
             }
             do {
                 try await Task.sleep(for: .milliseconds(250))
@@ -279,6 +283,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         case .quick3: model?.requestQuickAction(slot: 3)
         case .quick4: model?.requestQuickAction(slot: 4)
         case .quick5: model?.requestQuickAction(slot: 5)
+        case .cycleModels: model?.cycleModelsFromShortcut()
         case .toggle: toggle()
         case .clickThrough: toggleClickThrough()
         case .focus: focusInput()

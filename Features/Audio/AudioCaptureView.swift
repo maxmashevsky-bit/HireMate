@@ -45,7 +45,7 @@ struct AudioCaptureView: View {
                         Task { await audio.toggleManualQuestion() }
                     }.disabled(fragmentUnavailable)
                 } else if audio.questionMode == .oneShot {
-                    Button("Взять последние \(Int(audio.configuration.oneShot)) секунд") {
+                    Button("Взять последние \(audio.configuration.oneShot.formatted(.number.precision(.fractionLength(0...1)))) секунд") {
                         Task { await audio.captureOneShot() }
                     }.disabled(fragmentUnavailable)
                 } else {
@@ -66,8 +66,8 @@ struct AudioCaptureView: View {
                 Text("Только память: сохраняются последние 6 фрагментов. Экран не сохраняется; MP4-запись выключена.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Выделение речи · временный алгоритм по энергии") {
-                HStack { Text("Pre-roll"); Slider(value: $audio.configuration.preRoll, in: 0...15, step: 1); Text("\(Int(audio.configuration.preRoll)) с") }
-                HStack { Text("Последние секунды"); Slider(value: $audio.configuration.oneShot, in: 5...60, step: 1); Text("\(Int(audio.configuration.oneShot)) с") }
+                HStack { Text("Pre-roll"); Slider(value: $audio.configuration.preRoll, in: 0...15, step: 1); Text("\(audio.configuration.preRoll.formatted(.number.precision(.fractionLength(0...1)))) с") }
+                HStack { Text("Последние секунды"); Slider(value: $audio.configuration.oneShot, in: 5...60, step: 1); Text("\(audio.configuration.oneShot.formatted(.number.precision(.fractionLength(0...1)))) с") }
                 HStack { Text("Длина фрагмента"); Slider(value: $audio.configuration.chunkSeconds, in: 5...15, step: 1); Text("\(Int(audio.configuration.chunkSeconds)) с") }
                 HStack { Text("Пауза микрофона"); Slider(value: $audio.configuration.micSilence, in: 0.5...5, step: 0.5) }
                 HStack { Text("Пауза системы"); Slider(value: $audio.configuration.systemSilence, in: 0.5...5, step: 0.5) }
